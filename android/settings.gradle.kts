@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MobileMcpPro"
+rootProject.name = "DroidPilot"
 include(":app")

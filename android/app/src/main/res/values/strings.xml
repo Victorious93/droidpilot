@@ -1,18 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Mobile MCP Pro</string>
-    <string name="accessibility_service_description">Mobile MCP Pro uses accessibility features to provide AI-powered device automation. This service allows remote control of your device through the MCP protocol for testing and automation purposes.</string>
-    <string name="status_disconnected">Disconnected</string>
-    <string name="status_waiting">Waiting for connection...</string>
-    <string name="status_connected">Connected</string>
-    <string name="btn_start_server">Start Server</string>
-    <string name="btn_stop_server">Stop Server</string>
-    <string name="btn_open_accessibility">Open Accessibility Settings</string>
+    <string name="app_name">DroidPilot</string>
+    <string name="app_tagline">Accessibility-based device automation for MCP clients</string>
+
+    <!--
+      Shown verbatim on the system Accessibility consent screen. It states plainly what the
+      service does and that it accepts remote commands, because that is the fact a user
+      needs in order to give informed consent — and because an accessibility service that
+      understates its reach is one users are right to distrust.
+    -->
+    <string name="accessibility_service_description">DroidPilot reads the on-screen content of other apps and performs taps, swipes and text input on your behalf. While the DroidPilot server is running, these actions can be requested by an AI assistant on your local network that you have paired with this device using its pairing secret. Nothing is sent to the internet, and the server only runs while you have started it.</string>
+
+    <string name="accessibility_on">Accessibility service: on</string>
+    <string name="accessibility_off">Accessibility service: off</string>
+    <string name="accessibility_hint">DroidPilot needs this permission to read the screen and perform gestures. The server cannot run without it.</string>
+    <string name="btn_open_accessibility">Open Accessibility settings</string>
+
+    <string name="status_stopped">Server stopped</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_running">Server running</string>
+    <string name="status_failed">Server failed</string>
+
+    <string name="btn_start_server">Start server</string>
+    <string name="btn_stop_server">Stop server</string>
+    <string name="action_stop_server">Stop</string>
+
     <string name="label_port">Port</string>
-    <string name="label_ip_address">Device IP</string>
-    <string name="label_connections">Active Connections</string>
-    <string name="notification_channel_name">MCP Server</string>
-    <string name="notification_channel_description">Shows when MCP server is running</string>
-    <string name="notification_title">Mobile MCP Pro is running</string>
-    <string name="notification_text">WebSocket server active on port %d</string>
+    <string name="default_port">8765</string>
+    <string name="label_loopback_only">Loopback only (127.0.0.1)</string>
+    <string name="hint_loopback_only">Restricts the server to this device. Use with “adb forward tcp:8765 tcp:8765” when you do not want it reachable over the network.</string>
+
+    <string name="address_unknown">No network address found</string>
+    <string name="address_prefix">Reachable at:</string>
+    <string name="connections_none">No clients connected</string>
+    <plurals name="connections_count">
+        <item quantity="one">%d client connected</item>
+        <item quantity="other">%d clients connected</item>
+    </plurals>
+
+    <string name="pairing_title">Pairing secret</string>
+    <string name="pairing_explainer">Your MCP client must present this secret to connect. It also encrypts the connection. Treat it like a password — anyone who has it can control this device while the server is running.</string>
+    <string name="pairing_hidden">••••••••••••••••••••••••••••••••••••••••••••</string>
+    <string name="fingerprint_label">Fingerprint: %1$s</string>
+    <string name="btn_reveal">Reveal</string>
+    <string name="btn_hide">Hide</string>
+    <string name="btn_copy_pairing">Copy pairing URI</string>
+    <string name="btn_regenerate">Regenerate secret</string>
+    <string name="copied_to_clipboard">Pairing URI copied</string>
+    <string name="regenerate_title">Regenerate the pairing secret?</string>
+    <string name="regenerate_message">Every client paired with this device will stop working until you give it the new secret.</string>
+    <string name="regenerate_confirm">Regenerate</string>
+    <string name="regenerated">New pairing secret generated</string>
+    <string name="cancel">Cancel</string>
+
+    <string name="log_title">Activity</string>
+    <string name="btn_clear_log">Clear</string>
+
+    <string name="error_accessibility_required">Enable the Accessibility service before starting the server.</string>
+    <string name="error_invalid_port">Enter a port between 1024 and 65535.</string>
+    <string name="notification_permission_rationale">Without notification permission, Android hides the DroidPilot status notification — the server still runs, but you will not be able to see or stop it from the notification shade.</string>
+
+    <string name="notification_channel_name">Control server</string>
+    <string name="notification_channel_description">Shows while the DroidPilot control server is accepting connections</string>
+    <string name="notification_title">DroidPilot</string>
+    <string name="notification_starting">Starting the control server…</string>
+    <string name="notification_stopped">Control server stopped</string>
+    <string name="notification_failed">Control server stopped after an error</string>
+    <plurals name="notification_running">
+        <item quantity="one">Listening on port %1$d · %2$d client</item>
+        <item quantity="other">Listening on port %1$d · %2$d clients</item>
+    </plurals>
 </resources>

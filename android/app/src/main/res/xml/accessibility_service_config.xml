@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Accessibility service declaration.
+
+  `accessibilityEventTypes` is narrowed from the previous `typeAllMask`. DroidPilot reads
+  the UI tree on demand rather than reacting to events, so subscribing to every event type
+  meant the system delivered a callback for each frame of every animation in every app, all
+  of which were discarded. The two window-change types retained are the ones that keep
+  `flagRetrieveInteractiveWindows` supplied with current window state.
+
+  `canRequestFilterKeyEvents` is deliberately absent: DroidPilot has no reason to observe
+  keystrokes, and an accessibility service that can read every key press is a keylogger by
+  another name.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
     android:canPerformGestures="true"

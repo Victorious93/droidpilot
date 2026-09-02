@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Lint's ObsoleteSdkInt check suggests dropping the `-v26` qualifier because minSdk is 30.
+  That advice is wrong here: AAPT2 does not accept a bare `mipmap-anydpi` directory and
+  fails resource linking with "resource mipmap/ic_launcher not found". The qualifier stays;
+  the check is disabled in app/build.gradle.kts, since it is reported against the folder and
+  so cannot be suppressed from inside this file.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <!-- Themed icons (Android 13+). Without this the launcher falls back to the full-colour
+         icon when the user has themed icons enabled, which looks out of place on the home
+         screen next to every other app. -->
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

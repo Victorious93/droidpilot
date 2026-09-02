@@ -1,0 +1,9 @@
+{
+  "// note": "Typechecks the tests alongside the sources. Kept separate from tsconfig.json so that `npm run build` emits only src/ into dist/ and never ships test code.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

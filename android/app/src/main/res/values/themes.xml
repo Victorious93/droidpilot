@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MobileMcpPro" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/primary</item>
-        <item name="colorPrimaryContainer">@color/primary_container</item>
-        <item name="colorOnPrimary">@color/on_primary</item>
-        <item name="colorSecondary">@color/secondary</item>
+    <!--
+      Material 3, following the system light/dark setting. Dynamic colour is inherited from
+      Material3.DynamicColors on Android 12+; the brand colour is the fallback below that.
+    -->
+    <style name="Theme.DroidPilot" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorOnPrimary">@color/brand_on_primary</item>
+        <item name="android:statusBarColor">?attr/colorSurface</item>
     </style>
 </resources>

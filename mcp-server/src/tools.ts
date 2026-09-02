@@ -1,132 +1,218 @@
 import { z } from "zod";
 
+/**
+ * MCP tool surface.
+ *
+ * Descriptions are written for the model that reads them, so each one says when to reach
+ * for the tool and what it costs — not merely what it does. The steer toward `get_ui_tree`
+ * over `screenshot` is the highest-leverage line in this file: a UI dump is structured,
+ * searchable and roughly two orders of magnitude cheaper in tokens than an image, and a
+ * model given both will otherwise reach for the picture.
+ */
 export const toolDefinitions = {
   connect: {
     description:
-      "Connect to the Android device running Mobile MCP Pro. Must be called before any other commands.",
+      "Connect to an Android device running DroidPilot. Must be called before any other tool. " +
+      "Easiest usage: paste the pairing URI shown in the DroidPilot app (Copy pairing URI) as `pairingUri`. " +
+      "Alternatively supply `host`, `port` and `secret` separately. The connection is authenticated " +
+      "and encrypted with the pairing secret; a wrong secret is refused by the device.",
     inputSchema: {
-      host: z
-        .string()
-        .describe("IP address of the Android device (e.g. 192.168.1.100)"),
-      port: z
-        .number()
-        .default(8765)
-        .describe("WebSocket port (default: 8765)"),
-      authToken: z
+      pairingUri: z
         .string()
         .optional()
-        .describe("Optional authentication token"),
+        .describe("Pairing URI from the app, e.g. droidpilot://192.168.1.42:8765#<secret>"),
+      host: z.string().optional().describe("Device IP address, if not using pairingUri"),
+      port: z.number().int().min(1).max(65535).optional().describe("Port (default 8765)"),
+      secret: z.string().optional().describe("Pairing secret from the app, if not using pairingUri"),
     },
   },
 
   disconnect: {
-    description: "Disconnect from the Android device.",
+    description: "Disconnect from the currently connected device.",
     inputSchema: {},
   },
 
   get_device_info: {
     description:
-      "Get device information including manufacturer, model, screen resolution, and Android version.",
+      "Device manufacturer, model, Android version, screen size, and the list of capabilities " +
+      "this device actually grants. Check `capabilities` before relying on screenshots or gestures — " +
+      "a device may withhold either.",
     inputSchema: {},
-  },
-
-  screenshot: {
-    description:
-      "Take a screenshot of the current screen. Returns a base64-encoded JPEG image. IMPORTANT: Prefer `get_ui_tree` (UI dump) over screenshots whenever possible — UI dumps are far more token-efficient, structured, and reliable for element lookup and automation. Only use screenshots when visual inspection is strictly required (e.g. verifying rendering, images, or non-accessible content).",
-    inputSchema: {
-      quality: z
-        .number()
-        .min(1)
-        .max(100)
-        .default(80)
-        .describe("JPEG quality (1-100, default: 80)"),
-    },
   },
 
   get_ui_tree: {
     description:
-      "Get the full UI hierarchy tree of the current screen. Returns all visible elements with their properties (text, bounds, clickable, etc). PREFERRED over `screenshot` for understanding screen state — use this first for element discovery, automation, and assertions.",
+      "Read the UI hierarchy of the current screen as structured data: every element with its text, " +
+      "bounds, resource id and interaction flags. PREFER THIS OVER `screenshot` for understanding what " +
+      "is on screen, finding elements, and checking assertions — it is far cheaper in tokens, exact, " +
+      "and directly searchable. Reach for a screenshot only when you genuinely need to see rendering. " +
+      "If `truncated` comes back true, the tree hit the node budget: lower `maxDepth` or use `find_element`.",
     inputSchema: {
-      maxDepth: z
+      maxDepth: z.number().int().min(0).max(50).default(15).describe("How deep to walk (default 15)"),
+      maxNodes: z
         .number()
-        .default(15)
-        .describe("Maximum depth of UI tree traversal (default: 15)"),
+        .int()
+        .min(1)
+        .max(20000)
+        .default(3000)
+        .describe("Node budget for one request (default 3000)"),
     },
   },
 
   find_element: {
     description:
-      "Find UI elements matching given criteria. Search by text content, resource ID, class name, or content description.",
+      "Find elements matching text, resource id, class name or content description. Cheaper than " +
+      "`get_ui_tree` when you already know roughly what you are looking for. `text` matches either the " +
+      "visible label or the content description. Matching is a case-insensitive substring unless `exact` is set.",
     inputSchema: {
-      text: z.string().optional().describe("Text content to search for (partial match)"),
-      id: z.string().optional().describe("Resource ID to search for (partial match)"),
-      className: z.string().optional().describe("Class name to search for (e.g. android.widget.Button)"),
-      contentDescription: z.string().optional().describe("Content description to search for"),
-      maxResults: z.number().default(10).describe("Maximum number of results"),
+      text: z.string().optional().describe("Visible text or content description to match"),
+      id: z.string().optional().describe("Resource id, e.g. 'search_bar'"),
+      className: z.string().optional().describe("Class name, e.g. 'android.widget.Button'"),
+      contentDescription: z.string().optional().describe("Content description only"),
+      exact: z
+        .boolean()
+        .default(false)
+        .describe("Require exact equality instead of substring. Use when 'OK' must not match 'NOT OK'."),
+      maxResults: z.number().int().min(1).max(200).default(10).describe("Result cap (default 10)"),
+    },
+  },
+
+  click_element: {
+    description:
+      "Find an element and click it. PREFER THIS OVER `tap` — it survives layout changes, different " +
+      "screen sizes and scrolling, whereas coordinates do not. If the matched element is not itself " +
+      "clickable, its nearest clickable ancestor is used, which is what makes clicking a label inside a " +
+      "button work. At least one criterion is required.",
+    inputSchema: {
+      text: z.string().optional().describe("Visible text or content description"),
+      id: z.string().optional().describe("Resource id"),
+      className: z.string().optional().describe("Class name"),
+      contentDescription: z.string().optional().describe("Content description only"),
+      exact: z.boolean().default(false).describe("Require exact equality instead of substring"),
+    },
+  },
+
+  long_click_element: {
+    description:
+      "Find an element and long-press it — the usual way to open a context menu or enter a " +
+      "selection mode. Same matching rules as `click_element`.",
+    inputSchema: {
+      text: z.string().optional().describe("Visible text or content description"),
+      id: z.string().optional().describe("Resource id"),
+      className: z.string().optional().describe("Class name"),
+      contentDescription: z.string().optional().describe("Content description only"),
+      exact: z.boolean().default(false).describe("Require exact equality instead of substring"),
+    },
+  },
+
+  wait_for_element: {
+    description:
+      "Wait until an element appears, or the timeout elapses. Use this after any action that " +
+      "triggers navigation or loading, instead of taking a screenshot and hoping the screen has settled. " +
+      "A timeout is a normal result — it returns `found: false` rather than failing.",
+    inputSchema: {
+      text: z.string().optional().describe("Visible text or content description"),
+      id: z.string().optional().describe("Resource id"),
+      className: z.string().optional().describe("Class name"),
+      contentDescription: z.string().optional().describe("Content description only"),
+      exact: z.boolean().default(false).describe("Require exact equality instead of substring"),
+      timeout: z.number().int().min(100).max(300000).default(10000).describe("Milliseconds (default 10000)"),
+    },
+  },
+
+  screenshot: {
+    description:
+      "Capture the screen as a JPEG. EXPENSIVE — an image costs orders of magnitude more tokens than " +
+      "`get_ui_tree` and cannot be searched. Use it only when you must actually see rendering: verifying " +
+      "images, layout or canvas content that has no accessibility representation. For finding and acting " +
+      "on elements, use `get_ui_tree` or `find_element`. Android rate-limits captures to roughly one per second.",
+    inputSchema: {
+      quality: z.number().int().min(1).max(100).default(80).describe("JPEG quality (default 80)"),
+      maxDimension: z
+        .number()
+        .int()
+        .min(120)
+        .max(4096)
+        .default(1600)
+        .describe("Longest edge in pixels; the image is downscaled to fit (default 1600)"),
     },
   },
 
   tap: {
-    description: "Tap at specific screen coordinates.",
+    description:
+      "Tap absolute screen coordinates. Prefer `click_element` where possible — coordinates break when " +
+      "layout, density or scroll position changes. Use this for canvases, maps, games and anything else " +
+      "with no accessibility node.",
     inputSchema: {
-      x: z.number().describe("X coordinate"),
-      y: z.number().describe("Y coordinate"),
-      duration: z.number().default(100).describe("Tap duration in ms (default: 100)"),
+      x: z.number().describe("X in pixels"),
+      y: z.number().describe("Y in pixels"),
+      duration: z.number().int().min(1).max(60000).default(100).describe("Contact time in ms (default 100)"),
     },
   },
 
   long_press: {
-    description: "Long press at specific screen coordinates.",
+    description: "Press and hold at absolute coordinates. Prefer `long_click_element` where possible.",
     inputSchema: {
-      x: z.number().describe("X coordinate"),
-      y: z.number().describe("Y coordinate"),
-      duration: z.number().default(1000).describe("Press duration in ms (default: 1000)"),
+      x: z.number().describe("X in pixels"),
+      y: z.number().describe("Y in pixels"),
+      duration: z.number().int().min(1).max(60000).default(1000).describe("Hold time in ms (default 1000)"),
     },
   },
 
   swipe: {
-    description: "Perform a swipe gesture from one point to another.",
+    description:
+      "Drag from one point to another — for dismissing cards, pull-to-refresh, or dragging a handle. " +
+      "For ordinary list scrolling use `scroll`, which computes the geometry for you.",
     inputSchema: {
-      startX: z.number().describe("Start X coordinate"),
-      startY: z.number().describe("Start Y coordinate"),
-      endX: z.number().describe("End X coordinate"),
-      endY: z.number().describe("End Y coordinate"),
-      duration: z.number().default(300).describe("Swipe duration in ms (default: 300)"),
+      startX: z.number().describe("Start X"),
+      startY: z.number().describe("Start Y"),
+      endX: z.number().describe("End X"),
+      endY: z.number().describe("End Y"),
+      duration: z.number().int().min(1).max(60000).default(300).describe("Duration in ms (default 300)"),
     },
   },
 
   scroll: {
-    description: "Scroll the screen in a direction.",
+    description:
+      "Scroll the screen. `direction` is the direction the content moves: 'down' reveals content " +
+      "further down the page.",
     inputSchema: {
-      direction: z
-        .enum(["up", "down", "left", "right"])
-        .describe("Scroll direction"),
-      amount: z
-        .number()
-        .default(500)
-        .describe("Scroll distance in pixels (default: 500)"),
+      direction: z.enum(["up", "down", "left", "right"]).describe("Direction the content moves"),
+      amount: z.number().min(1).max(10000).default(500).describe("Distance in pixels (default 500)"),
+    },
+  },
+
+  pinch: {
+    description: "Two-finger pinch to zoom. `scale` above 1 zooms in, below 1 zooms out.",
+    inputSchema: {
+      x: z.number().optional().describe("Centre X (default: screen centre)"),
+      y: z.number().optional().describe("Centre Y (default: screen centre)"),
+      scale: z.number().min(0.1).max(10).default(1.5).describe("Zoom factor (default 1.5)"),
+      duration: z.number().int().min(1).max(60000).default(400).describe("Duration in ms (default 400)"),
     },
   },
 
   type_text: {
     description:
-      "Type text into the currently focused input field. Appends to existing text.",
+      "Append text to the focused input field. Click the field first — this fails if nothing is focused. " +
+      "The device never echoes the text back, and refuses to type into a password field's neighbours blindly.",
     inputSchema: {
-      text: z.string().describe("Text to type"),
+      text: z.string().max(10000).describe("Text to append"),
     },
   },
 
   set_text: {
     description:
-      "Set (replace) the text of the currently focused input field.",
+      "Replace the entire contents of the focused input field. Pass an empty string to clear it.",
     inputSchema: {
-      text: z.string().describe("Text to set"),
+      text: z.string().max(10000).describe("Replacement text; empty clears the field"),
     },
   },
 
   press_key: {
     description:
-      "Press a system key/button (back, home, recents, notifications, quick_settings, power_dialog, lock_screen, take_screenshot).",
+      "Press a system key or perform a global action: back, home, recents, notifications, " +
+      "quick_settings, power_dialog, split_screen, lock_screen, take_screenshot.",
     inputSchema: {
       key: z
         .enum([
@@ -136,65 +222,27 @@ export const toolDefinitions = {
           "notifications",
           "quick_settings",
           "power_dialog",
+          "split_screen",
           "lock_screen",
           "take_screenshot",
         ])
-        .describe("Key to press"),
-    },
-  },
-
-  click_element: {
-    description:
-      "Find and click a UI element by text, ID, or content description. More reliable than coordinate-based tapping.",
-    inputSchema: {
-      text: z.string().optional().describe("Text of the element to click"),
-      id: z.string().optional().describe("Resource ID of the element"),
-      contentDescription: z.string().optional().describe("Content description of the element"),
-    },
-  },
-
-  wait_for_element: {
-    description:
-      "Wait for a UI element to appear on screen. Useful for waiting after navigation or loading.",
-    inputSchema: {
-      text: z.string().optional().describe("Text to wait for"),
-      id: z.string().optional().describe("Resource ID to wait for"),
-      className: z.string().optional().describe("Class name to wait for"),
-      contentDescription: z.string().optional().describe("Content description to wait for"),
-      timeout: z
-        .number()
-        .default(10000)
-        .describe("Timeout in milliseconds (default: 10000)"),
+        .describe("Key or global action"),
     },
   },
 
   open_app: {
-    description: "Open an app by its package name.",
-    inputSchema: {
-      package: z
-        .string()
-        .describe(
-          "Package name of the app (e.g. com.android.chrome, com.google.android.apps.maps)"
-        ),
-    },
-  },
-
-  pinch: {
     description:
-      "Perform a pinch gesture for zoom in/out. Scale > 1 zooms in, < 1 zooms out.",
+      "Launch an app by package name, e.g. com.android.chrome. Only apps with a launcher icon can be " +
+      "opened. Follow with `wait_for_element` rather than assuming the app is ready.",
     inputSchema: {
-      x: z.number().optional().describe("Center X coordinate (default: screen center)"),
-      y: z.number().optional().describe("Center Y coordinate (default: screen center)"),
-      scale: z
-        .number()
-        .default(1.5)
-        .describe("Scale factor (>1 zoom in, <1 zoom out, default: 1.5)"),
-      duration: z.number().default(400).describe("Duration in ms (default: 400)"),
+      package: z.string().describe("Package name, e.g. com.android.chrome"),
     },
   },
 
   get_focused: {
-    description: "Get information about the currently focused input element.",
+    description:
+      "Describe the currently focused input element, or report that nothing is focused. Useful for " +
+      "confirming a field is ready before typing into it.",
     inputSchema: {},
   },
 } as const;
