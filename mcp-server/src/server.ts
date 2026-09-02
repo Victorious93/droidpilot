@@ -1,299 +1,239 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AndroidClient } from "./android-client.js";
+import { decodePairingSecret, parsePairingUri } from "./secure-channel.js";
 import { toolDefinitions } from "./tools.js";
 
 type TextContent = { type: "text"; text: string };
 type ImageContent = { type: "image"; data: string; mimeType: string };
-type ToolResult = { content: (TextContent | ImageContent)[] };
+
+/**
+ * `isError` is the field the previous implementation never set.
+ *
+ * Without it every failure came back as an ordinary successful tool call whose text
+ * happened to begin "Error:", so the model had to infer failure from prose — and would
+ * cheerfully carry on as though a tap it never performed had succeeded.
+ */
+type ToolResult = { content: (TextContent | ImageContent)[]; isError?: boolean };
+
+function ok(text: string): ToolResult {
+  return { content: [{ type: "text", text }] };
+}
+
+function fail(text: string): ToolResult {
+  return { content: [{ type: "text", text }], isError: true };
+}
 
 export function createServer(): McpServer {
-  const server = new McpServer({
-    name: "droidpilot",
-    version: "1.0.0",
-  });
+  const server = new McpServer({ name: "droidpilot", version: "2.0.0" });
 
   let client: AndroidClient | null = null;
 
-  function ensureConnected(): AndroidClient {
-    if (!client || !client.connected) {
-      throw new Error(
-        "Not connected to Android device. Use the 'connect' tool first."
-      );
-    }
-    return client;
-  }
-
-  async function sendAndFormat(
+  /**
+   * Runs a device command, turning every failure mode into an `isError` result.
+   *
+   * Throwing out of an MCP handler produces an opaque protocol-level error; returning a
+   * described failure lets the model read what went wrong and choose a different approach.
+   */
+  async function send(
     command: string,
-    params?: Record<string, unknown>,
-    timeoutMs?: number
+    params: Record<string, unknown> = {},
+    timeoutMs?: number,
   ): Promise<ToolResult> {
-    const c = ensureConnected();
-    const response = await c.sendCommand(command, params, timeoutMs);
+    if (!client?.connected) {
+      return fail("Not connected to a device. Use the 'connect' tool first.");
+    }
+
+    let response;
+    try {
+      response = await client.sendCommand(command, params, timeoutMs);
+    } catch (error) {
+      return fail(`${command} failed: ${(error as Error).message}`);
+    }
 
     if (!response.success) {
-      return {
-        content: [{ type: "text", text: `Error: ${response.error}` }],
-      };
+      // The device's own error code is included: it is stable and machine-readable, so a
+      // model can distinguish "element not found, try another selector" from
+      // "this device cannot take screenshots, stop asking".
+      const code = response.error_code ? ` [${response.error_code}]` : "";
+      return fail(`${command} failed${code}: ${response.error ?? "unknown error"}`);
     }
 
-    // Handle screenshot specially - return as image content
     if (command === "screenshot" && response.data?.image) {
-      const image = response.data.image as string;
-      const width = response.data.width as number;
-      const height = response.data.height as number;
-      const format = response.data.format as string;
+      const { image, width, height, format, scaled } = response.data as Record<string, unknown>;
       return {
         content: [
-          {
-            type: "image",
-            data: image,
-            mimeType: `image/${format}`,
-          },
+          { type: "image", data: image as string, mimeType: `image/${format ?? "jpeg"}` },
           {
             type: "text",
-            text: `Screenshot captured: ${width}x${height}`,
+            text: `Screenshot ${width}×${height}${scaled ? " (downscaled)" : ""}`,
           },
         ],
       };
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(response.data, null, 2),
-        },
-      ],
-    };
+    return ok(JSON.stringify(response.data ?? {}, null, 2));
   }
 
-  // --- Connection tools ---
+  // ------------------------------------------------------------------ connection
 
   server.tool(
     "connect",
     toolDefinitions.connect.description,
-    {
-      host: toolDefinitions.connect.inputSchema.host,
-      port: toolDefinitions.connect.inputSchema.port,
-      authToken: toolDefinitions.connect.inputSchema.authToken,
-    },
-    async ({ host, port, authToken }): Promise<ToolResult> => {
-      if (client?.connected) {
-        client.disconnect();
-      }
+    toolDefinitions.connect.inputSchema,
+    async ({ pairingUri, host, port, secret }): Promise<ToolResult> => {
+      const target = resolveTarget({ pairingUri, host, port, secret });
+      if ("error" in target) return fail(target.error);
 
-      client = new AndroidClient(host, port, authToken);
+      client?.disconnect();
+      client = new AndroidClient(target);
 
       try {
-        await client.connect();
-
-        const pingResp = await client.sendCommand("ping");
-        if (!pingResp.success) {
-          throw new Error("Ping failed");
-        }
-
-        const infoResp = await client.sendCommand("get_device_info");
-        const info = infoResp.data || {};
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Connected to ${info.manufacturer} ${info.model} (Android ${info.release}, ${info.screenWidth}x${info.screenHeight})`,
-            },
-          ],
-        };
-      } catch (e) {
+        const hello = await client.connect();
+        return ok(
+          [
+            `Connected to ${target.host}:${target.port}`,
+            `DroidPilot ${hello.appVersion} (protocol v${hello.protocolVersion}), channel encrypted.`,
+            hello.capabilities.length > 0
+              ? `Capabilities: ${hello.capabilities.join(", ")}`
+              : "The device reports no capabilities — the Accessibility service is probably off.",
+          ].join("\n"),
+        );
+      } catch (error) {
         client = null;
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Failed to connect to ${host}:${port} - ${(e as Error).message}`,
-            },
-          ],
-        };
+        return fail(`Could not connect to ${target.host}:${target.port} — ${(error as Error).message}`);
       }
-    }
-  );
-
-  server.tool(
-    "disconnect",
-    toolDefinitions.disconnect.description,
-    {},
-    async (): Promise<ToolResult> => {
-      if (client) {
-        client.disconnect();
-        client = null;
-      }
-      return {
-        content: [{ type: "text", text: "Disconnected" }],
-      };
-    }
-  );
-
-  server.tool(
-    "get_device_info",
-    toolDefinitions.get_device_info.description,
-    {},
-    async (): Promise<ToolResult> => sendAndFormat("get_device_info")
-  );
-
-  server.tool(
-    "screenshot",
-    toolDefinitions.screenshot.description,
-    { quality: toolDefinitions.screenshot.inputSchema.quality },
-    async ({ quality }): Promise<ToolResult> =>
-      sendAndFormat("screenshot", { quality }, 15000)
-  );
-
-  server.tool(
-    "get_ui_tree",
-    toolDefinitions.get_ui_tree.description,
-    { maxDepth: toolDefinitions.get_ui_tree.inputSchema.maxDepth },
-    async ({ maxDepth }): Promise<ToolResult> =>
-      sendAndFormat("get_ui_tree", { maxDepth })
-  );
-
-  server.tool(
-    "find_element",
-    toolDefinitions.find_element.description,
-    {
-      text: toolDefinitions.find_element.inputSchema.text,
-      id: toolDefinitions.find_element.inputSchema.id,
-      className: toolDefinitions.find_element.inputSchema.className,
-      contentDescription:
-        toolDefinitions.find_element.inputSchema.contentDescription,
-      maxResults: toolDefinitions.find_element.inputSchema.maxResults,
     },
-    async (params): Promise<ToolResult> => sendAndFormat("find_element", params)
   );
 
-  server.tool(
-    "tap",
-    toolDefinitions.tap.description,
-    {
-      x: toolDefinitions.tap.inputSchema.x,
-      y: toolDefinitions.tap.inputSchema.y,
-      duration: toolDefinitions.tap.inputSchema.duration,
-    },
-    async (params): Promise<ToolResult> => sendAndFormat("tap", params)
+  server.tool("disconnect", toolDefinitions.disconnect.description, {}, async (): Promise<ToolResult> => {
+    client?.disconnect();
+    client = null;
+    return ok("Disconnected");
+  });
+
+  // --------------------------------------------------------------------- reading
+
+  server.tool("get_device_info", toolDefinitions.get_device_info.description, {}, () =>
+    send("get_device_info"),
   );
 
-  server.tool(
-    "long_press",
-    toolDefinitions.long_press.description,
-    {
-      x: toolDefinitions.long_press.inputSchema.x,
-      y: toolDefinitions.long_press.inputSchema.y,
-      duration: toolDefinitions.long_press.inputSchema.duration,
-    },
-    async (params): Promise<ToolResult> => sendAndFormat("long_press", params)
+  server.tool("get_ui_tree", toolDefinitions.get_ui_tree.description, toolDefinitions.get_ui_tree.inputSchema, (p) =>
+    send("get_ui_tree", p),
   );
 
-  server.tool(
-    "swipe",
-    toolDefinitions.swipe.description,
-    {
-      startX: toolDefinitions.swipe.inputSchema.startX,
-      startY: toolDefinitions.swipe.inputSchema.startY,
-      endX: toolDefinitions.swipe.inputSchema.endX,
-      endY: toolDefinitions.swipe.inputSchema.endY,
-      duration: toolDefinitions.swipe.inputSchema.duration,
-    },
-    async (params): Promise<ToolResult> => sendAndFormat("swipe", params)
+  server.tool("find_element", toolDefinitions.find_element.description, toolDefinitions.find_element.inputSchema, (p) =>
+    send("find_element", p),
   );
 
-  server.tool(
-    "scroll",
-    toolDefinitions.scroll.description,
-    {
-      direction: toolDefinitions.scroll.inputSchema.direction,
-      amount: toolDefinitions.scroll.inputSchema.amount,
-    },
-    async (params): Promise<ToolResult> => sendAndFormat("scroll", params)
+  server.tool("get_focused", toolDefinitions.get_focused.description, {}, () => send("get_focused"));
+
+  server.tool("screenshot", toolDefinitions.screenshot.description, toolDefinitions.screenshot.inputSchema, (p) =>
+    send("screenshot", p, 30_000),
   );
 
-  server.tool(
-    "type_text",
-    toolDefinitions.type_text.description,
-    { text: toolDefinitions.type_text.inputSchema.text },
-    async (params): Promise<ToolResult> => sendAndFormat("type_text", params)
-  );
-
-  server.tool(
-    "set_text",
-    toolDefinitions.set_text.description,
-    { text: toolDefinitions.set_text.inputSchema.text },
-    async (params): Promise<ToolResult> => sendAndFormat("set_text", params)
-  );
-
-  server.tool(
-    "press_key",
-    toolDefinitions.press_key.description,
-    { key: toolDefinitions.press_key.inputSchema.key },
-    async (params): Promise<ToolResult> => sendAndFormat("press_key", params)
-  );
+  // --------------------------------------------------------------------- acting
 
   server.tool(
     "click_element",
     toolDefinitions.click_element.description,
-    {
-      text: toolDefinitions.click_element.inputSchema.text,
-      id: toolDefinitions.click_element.inputSchema.id,
-      contentDescription:
-        toolDefinitions.click_element.inputSchema.contentDescription,
-    },
-    async (params): Promise<ToolResult> =>
-      sendAndFormat("click_element", params)
+    toolDefinitions.click_element.inputSchema,
+    (p) => send("click_element", p),
+  );
+
+  server.tool(
+    "long_click_element",
+    toolDefinitions.long_click_element.description,
+    toolDefinitions.long_click_element.inputSchema,
+    (p) => send("long_click_element", p),
   );
 
   server.tool(
     "wait_for_element",
     toolDefinitions.wait_for_element.description,
-    {
-      text: toolDefinitions.wait_for_element.inputSchema.text,
-      id: toolDefinitions.wait_for_element.inputSchema.id,
-      className: toolDefinitions.wait_for_element.inputSchema.className,
-      contentDescription:
-        toolDefinitions.wait_for_element.inputSchema.contentDescription,
-      timeout: toolDefinitions.wait_for_element.inputSchema.timeout,
-    },
-    async (params): Promise<ToolResult> =>
-      sendAndFormat(
-        "wait_for_element",
-        params,
-        (params.timeout ?? 10000) + 5000
-      )
+    toolDefinitions.wait_for_element.inputSchema,
+    (p) =>
+      // The client's own deadline must outlast the device's, or the transport gives up
+      // first and reports a timeout for a wait that was proceeding normally.
+      send("wait_for_element", p, (p.timeout ?? 10_000) + 15_000),
   );
 
-  server.tool(
-    "open_app",
-    toolDefinitions.open_app.description,
-    { package: toolDefinitions.open_app.inputSchema.package },
-    async (params): Promise<ToolResult> =>
-      sendAndFormat("open_app", { package: params.package })
+  server.tool("tap", toolDefinitions.tap.description, toolDefinitions.tap.inputSchema, (p) => send("tap", p));
+
+  server.tool("long_press", toolDefinitions.long_press.description, toolDefinitions.long_press.inputSchema, (p) =>
+    send("long_press", p),
   );
 
-  server.tool(
-    "pinch",
-    toolDefinitions.pinch.description,
-    {
-      x: toolDefinitions.pinch.inputSchema.x,
-      y: toolDefinitions.pinch.inputSchema.y,
-      scale: toolDefinitions.pinch.inputSchema.scale,
-      duration: toolDefinitions.pinch.inputSchema.duration,
-    },
-    async (params): Promise<ToolResult> => sendAndFormat("pinch", params)
+  server.tool("swipe", toolDefinitions.swipe.description, toolDefinitions.swipe.inputSchema, (p) => send("swipe", p));
+
+  server.tool("scroll", toolDefinitions.scroll.description, toolDefinitions.scroll.inputSchema, (p) =>
+    send("scroll", p),
   );
 
-  server.tool(
-    "get_focused",
-    toolDefinitions.get_focused.description,
-    {},
-    async (): Promise<ToolResult> => sendAndFormat("get_focused")
+  server.tool("pinch", toolDefinitions.pinch.description, toolDefinitions.pinch.inputSchema, (p) => send("pinch", p));
+
+  server.tool("type_text", toolDefinitions.type_text.description, toolDefinitions.type_text.inputSchema, (p) =>
+    send("type_text", p),
+  );
+
+  server.tool("set_text", toolDefinitions.set_text.description, toolDefinitions.set_text.inputSchema, (p) =>
+    send("set_text", p),
+  );
+
+  server.tool("press_key", toolDefinitions.press_key.description, toolDefinitions.press_key.inputSchema, (p) =>
+    send("press_key", p),
+  );
+
+  server.tool("open_app", toolDefinitions.open_app.description, toolDefinitions.open_app.inputSchema, (p) =>
+    send("open_app", { package: p.package }),
   );
 
   return server;
+}
+
+/**
+ * Resolves the connection target from either a pairing URI or discrete fields.
+ *
+ * Exported for tests: this is pure input handling and it is where a user's mistake — a
+ * truncated secret, a URI pasted into the wrong field — should turn into an explanation
+ * rather than a failed connection with no clue why.
+ */
+export function resolveTarget(input: {
+  pairingUri?: string;
+  host?: string;
+  port?: number;
+  secret?: string;
+}): { host: string; port: number; secret: Buffer } | { error: string } {
+  if (input.pairingUri) {
+    const parsed = parsePairingUri(input.pairingUri);
+    if (!parsed) {
+      return {
+        error:
+          "That does not look like a DroidPilot pairing URI. It should be " +
+          "droidpilot://<host>:<port>#<secret> — use “Copy pairing URI” in the app.",
+      };
+    }
+    return parsed;
+  }
+
+  if (!input.host) {
+    return { error: "Provide either `pairingUri`, or `host` and `secret`." };
+  }
+  if (!input.secret) {
+    return {
+      error:
+        "A pairing secret is required. DroidPilot refuses unauthenticated connections. " +
+        "Find it under “Pairing secret” in the app.",
+    };
+  }
+
+  const secret = decodePairingSecret(input.secret);
+  if (!secret) {
+    return {
+      error:
+        "The pairing secret is malformed. It should be 43 URL-safe base64 characters — " +
+        "copy it again from the app, making sure nothing was truncated.",
+    };
+  }
+
+  return { host: input.host, port: input.port ?? 8765, secret };
 }

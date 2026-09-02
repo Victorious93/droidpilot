@@ -1,28 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+
+    <!--
+      Package visibility.
+
+      This replaces QUERY_ALL_PACKAGES. That permission is policy-restricted on Google Play
+      and grants sight of every installed package, including ones DroidPilot has no business
+      knowing about — an unnecessary disclosure of what the user has installed.
+
+      This declaration grants visibility of exactly the apps that have a launcher icon,
+      which is precisely the set `open_app` is able to launch. Nothing is lost: a package
+      with no launchable activity could never have been opened anyway.
+
+      ACCESS_WIFI_STATE was also dropped; addresses now come from ConnectivityManager, which
+      needs only ACCESS_NETWORK_STATE.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
+        android:name=".DroidPilotApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MobileMcpPro"
-        android:networkSecurityConfig="@xml/network_security_config">
+        android:theme="@style/Theme.DroidPilot">
+        <!--
+          No android:networkSecurityConfig. The previous manifest pointed at a config that
+          set cleartextTrafficPermitted="true" for all destinations — but that setting
+          governs the app as an HTTP *client*, and DroidPilot makes no outbound requests at
+          all. It relaxed a platform default for nothing. With it removed, targetSdk 35's
+          default (cleartext denied) applies.
+        -->
 
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.MainActivity"
             android:exported="true"
-            android:launchMode="singleTop">
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -30,8 +57,9 @@
         </activity>
 
         <service
-            android:name=".service.MobileAccessibilityService"
+            android:name=".service.DroidPilotAccessibilityService"
             android:exported="false"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -42,9 +70,19 @@
         </service>
 
         <service
-            android:name=".service.ConnectionForegroundService"
+            android:name=".service.ServerForegroundService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <!--
+              Android 14 requires a stated subtype for specialUse, and rejects the app at
+              review without it. DroidPilot holds a listening socket for as long as the user
+              has explicitly started it; none of the categorised types (dataSync,
+              mediaPlayback, connectedDevice …) describe an inbound server socket.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Hosts the local control server that accepts authenticated automation commands from a paired MCP client on the user's own network. The service runs only while the user has started it and stops when they stop it." />
+        </service>
 
     </application>
 

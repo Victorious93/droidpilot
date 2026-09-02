@@ -9,3 +9,11 @@
 .cxx
 local.properties
 /app/build
+
+# Release signing material — never commit these.
+keystore.properties
+*.jks
+*.keystore
+
+# Kotlin build-tooling scratch directory (Kotlin 2.x)
+.kotlin/

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pairing secret must not leave the device through backup or device transfer.
+
+  It is stored wrapped by a non-exportable AndroidKeyStore key, so a copied blob would be
+  undecryptable on other hardware anyway — but excluding it outright means the ciphertext
+  is never written to a backup in the first place, and a restored install generates a fresh
+  secret and re-pairs rather than silently failing to decrypt.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="droidpilot_secure.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="droidpilot_secure.xml" />
+    </device-transfer>
+</data-extraction-rules>
