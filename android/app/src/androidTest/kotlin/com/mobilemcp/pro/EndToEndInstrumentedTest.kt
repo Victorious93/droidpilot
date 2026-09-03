@@ -83,7 +83,12 @@ class EndToEndInstrumentedTest {
 
     @After
     fun stopServer() {
-        server.shutdown()
+        // Guarded because @After runs even when @Before threw part-way through. Touching a
+        // lateinit field here unconditionally replaces the real setup failure with
+        // "lateinit property server has not been initialized", which is what the first CI
+        // run reported for all ten failures — hiding the actual cause behind a message
+        // about the teardown.
+        if (::server.isInitialized) server.shutdown()
         scenario?.close()
     }
 
