@@ -171,7 +171,7 @@ See `SECURITY.md` for the cryptographic construction and threat model.
 
 ## Testing
 
-179 tests: 144 that run anywhere, and 35 instrumented tests that need a device or emulator.
+222 tests: 187 that run anywhere, and 35 instrumented tests that need a device or emulator.
 
 ### Off-device (144)
 

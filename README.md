@@ -1,28 +1,133 @@
-# DroidPilot
+<p align="center">
+  <img src="docs/images/droidpilot-forge-logo.png" alt="DroidPilot Forge" width="220">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Android 11+](https://img.shields.io/badge/Android-11%2B-green.svg)](https://developer.android.com)
-[![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-blue.svg)](https://modelcontextprotocol.io)
+<h1 align="center">DroidPilot Forge</h1>
 
-**Android device automation for AI agents, over Accessibility Service + MCP.**
+<p align="center"><em>An enhanced, agentic evolution of DroidPilot.</em></p>
 
-> Control an Android device from Claude, or any MCP-compatible AI — no ADB, no USB, no screen
-> mirroring. Just Wi-Fi.
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://developer.android.com"><img src="https://img.shields.io/badge/Android-11%2B-green.svg" alt="Android 11+"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-Compatible-blue.svg" alt="MCP Compatible"></a>
+  <a href="https://kotlinlang.org"><img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF.svg" alt="Kotlin 2.0"></a>
+</p>
 
-DroidPilot reads the device's UI tree directly through Android's Accessibility APIs and acts
-on it through OS gesture dispatch. That is structurally more reliable than OCR over
-screenshots, and dramatically cheaper in tokens: the agent gets labelled, searchable
-elements instead of an image it has to interpret.
+---
 
-## Key features
+DroidPilot Forge lets an AI agent operate a real Android device: it reads the on-screen UI
+tree through Android's Accessibility APIs and acts on it through OS gesture dispatch, over
+an authenticated, encrypted connection. No ADB, no USB, no screen mirroring, no OCR.
 
-- **No ADB required** — connects over Wi-Fi via WebSocket
-- **Native UI tree access** — no screenshot OCR or computer vision
-- **Authenticated and encrypted** — every connection needs a pairing secret; every frame is AES-256-GCM
-- **Reliable actions** — taps, swipes and text input through OS APIs
-- **MCP native** — works with Claude Desktop, Claude Code, and any MCP client
-- **Low token cost** — structured UI data instead of image analysis
-- **Honest capability reporting** — the device tells the agent what it actually can and cannot do
+It is a modified and expanded version of [DroidPilot](#attribution), rebuilt around a
+security core that treats privileged operations as something a device owner authorises
+explicitly rather than something a paired connection implies.
+
+> **Read the status column before you read the feature list.** This project distinguishes
+> what is implemented and tested from what is designed but not yet wired up. That
+> distinction is kept honest deliberately — see [Implementation status](#implementation-status).
+
+## Contents
+
+- [What it does today](#what-it-does-today)
+- [Implementation status](#implementation-status)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [MCP tools](#mcp-tools)
+- [Security model](#security-model)
+- [Authorization core](#authorization-core)
+- [Privileged and root operations](#privileged-and-root-operations)
+- [Operating modes](#operating-modes)
+- [Building from source](#building-from-source)
+- [Project structure](#project-structure)
+- [Testing](#testing)
+- [Limitations](#limitations)
+- [Roadmap](#roadmap)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
+- [Attribution](#attribution)
+
+---
+
+## What it does today
+
+An MCP-compatible agent — Claude Desktop, Claude Code, or anything else speaking the
+protocol — connects to the Android app over your local network and drives the device:
+
+```
+Open Chrome and search for the weather
+Find the search bar and type "hello world"
+Scroll down and tell me what you see
+Press the back button
+```
+
+The agent receives **structured, labelled UI elements**, not an image it has to interpret.
+That is more reliable than OCR over screenshots and roughly two orders of magnitude cheaper
+in tokens.
+
+| Approach | Reliability | Speed | Token cost | Setup |
+|---|---|---|---|---|
+| ADB-based | Low — connection drops, limited UI access | Medium | High (screenshot analysis) | USB / Wi-Fi ADB |
+| Screen mirroring + OCR | Low — OCR errors, high latency | Slow | Very high | Complex |
+| **DroidPilot Forge** | **High — native OS integration** | **Fast** | **Low (structured data)** | **Install APK** |
+
+---
+
+## Implementation status
+
+Every row below was verified by reading the code in this repository. Nothing is marked
+implemented because it was planned.
+
+### Implemented and tested
+
+| Capability | Evidence |
+|---|---|
+| Android UI automation (tree, selectors, gestures, text, keys, app launch) | 18 instrumented tests on a real emulator |
+| Screen capture with size caps | Instrumented |
+| Authenticated connection (256-bit pairing secret, checked during HTTP upgrade) | Unit + instrumented |
+| AES-256-GCM encrypted transport with replay rejection | Unit + instrumented, cross-checked against the Node implementation |
+| Pairing-secret storage in hardware-backed Android Keystore | 8 instrumented tests against the real keystore |
+| MCP server and tool surface | Unit tested against a protocol-accurate fake device |
+| Honest capability reporting from the live service | Instrumented |
+
+### Implemented as a library, not yet reachable from the app
+
+These are complete, unit-tested Kotlin components under `core/`. **No production code path
+calls them yet** — there is no remote-device transport or UI wired to them, so the
+behaviour they describe is not available to a user of the app today.
+
+| Component | Status |
+|---|---|
+| `RemotePermission` — ten permissions plus `AI_ROOT` | Library only |
+| `AuthorizationManager` — single decision point, per-command evaluation | Library only |
+| `Grant` / `GrantDuration` — once, timed, until-revoked, with revocation | Library only |
+| `RequestGuard` — request-level replay and clock-skew rejection | Library only |
+| `RootManager` — provider-agnostic elevated-shell detection | Library only |
+| `ProcessShellExecutor` — bounded, timeout-enforcing process execution | Library only |
+| `RootCommandHandler` — the ordered authorisation sequence | Library only |
+| `AuditLogger` — privileged-operation trail, sizes not contents | Library only |
+
+### Not implemented
+
+Designed or discussed, but absent from the codebase. Do not rely on any of it.
+
+| Capability | Status |
+|---|---|
+| Developer Mode (autonomous build/test/fix loop) | Planned |
+| Dual-mode manager / mode switching | Planned |
+| Device identity and device-to-device pairing | Planned |
+| Remote device control (device A → device B) | Planned |
+| Remote command bus / offline queue | Planned |
+| Interactive root sessions | Planned |
+| Root automations | Planned |
+| Knowledge graph | Planned |
+| On-device AI provider, model routing, context engine, token budgets | Planned |
+| Persistent database and migrations | Planned |
+| Remote UI / Developer UI | Planned |
+| APK installation from within the app | Not feasible without device-owner or root — see [Limitations](#limitations) |
+
+---
 
 ## How it works
 
@@ -34,13 +139,8 @@ elements instead of an image it has to interpret.
 └──────────────┘                 └──────────────┘                └─────────────────────┘
 ```
 
-## Why DroidPilot
-
-| Approach | Reliability | Speed | Token cost | Setup |
-|---|---|---|---|---|
-| ADB-based | Low — connection drops, limited UI access | Medium | High (screenshot analysis) | USB / Wi-Fi ADB |
-| Screen mirroring + OCR | Low — OCR errors, high latency | Slow | Very high | Complex |
-| **DroidPilot** | **High — native OS integration** | **Fast** | **Low (structured data)** | **Install APK** |
+The agent is the model on the far end of the socket. The Android app is a transport and an
+execution surface, not an agent runtime — there is no model running on the device.
 
 ---
 
@@ -48,7 +148,7 @@ elements instead of an image it has to interpret.
 
 ### 1. Build and install the app
 
-**Requirements:** Android 11+ (API 30), and a PC on the same network.
+**Requirements:** Android 11+ (API 30), and a computer on the same network.
 
 ```bash
 cd android
@@ -60,8 +160,8 @@ Or open `android/` in Android Studio.
 
 Then on the device:
 
-1. Open **DroidPilot**.
-2. Tap **Open Accessibility settings** and enable **DroidPilot**.
+1. Open **DroidPilot Forge**.
+2. Tap **Open Accessibility settings** and enable the service.
 3. Return to the app and tap **Start server**.
 4. Tap **Copy pairing URI**. You now have a string like
    `droidpilot://192.168.1.42:8765#<secret>`.
@@ -94,26 +194,17 @@ settings. Same shape for both:
 }
 ```
 
-### 4. Connect
+The server key stays `droidpilot` so existing client configurations keep working.
 
-Paste the pairing URI:
+### 4. Connect
 
 ```
 Connect to my Android device: droidpilot://192.168.1.42:8765#<secret>
 ```
 
-Then work in plain language:
-
-```
-Open Chrome and search for the weather
-Find the search bar and type "hello world"
-Scroll down and tell me what you see
-Press the back button
-```
-
 ---
 
-## Available MCP tools
+## MCP tools
 
 | Tool | Description |
 |---|---|
@@ -135,28 +226,25 @@ Press the back button
 
 ### A note on screenshots
 
-Prefer `get_ui_tree` and `find_element`. A UI dump is structured, exact, searchable, and
-roughly two orders of magnitude cheaper in tokens than an image. Reach for `screenshot` only
-when you genuinely need to *see* rendering — images, charts, canvas content with no
-accessibility representation. Android also rate-limits captures to about one per second.
+Prefer `get_ui_tree` and `find_element`. A UI dump is structured, exact, searchable, and far
+cheaper in tokens than an image. Reach for `screenshot` only when you genuinely need to
+*see* rendering — images, charts, canvas content with no accessibility representation.
+Android also rate-limits captures to about one per second.
 
 ---
 
-## Security
+## Security model
 
 Every connection is authenticated with a 256-bit pairing secret and encrypted with
-AES-256-GCM. The secret is checked **during the HTTP upgrade**, so an unauthenticated peer
-never reaches a state where it could send a command. It is stored wrapped by a
+AES-256-GCM. The secret is verified **during the HTTP upgrade**, so an unauthenticated peer
+never reaches a state in which it could send a command. It is stored wrapped by a
 hardware-backed Android Keystore key and excluded from backups.
 
-Password fields are never transmitted, and typed text is never echoed back or logged.
+Records are numbered with a strictly increasing counter, so a replayed or reordered record
+is rejected rather than re-executed. Password fields are never transmitted, and typed text
+is never echoed back or logged.
 
-**If you are running DroidPilot 1.0, upgrade.** That release shipped with an `authToken`
-field that was never assigned anywhere, so every 1.0 server accepted any client on the
-network with no credential at all.
-
-Full details, including the cryptographic construction and an explicit threat model, are in
-[SECURITY.md](SECURITY.md).
+Full construction and threat model: **[SECURITY.md](SECURITY.md)**.
 
 ### Reducing exposure further
 
@@ -170,33 +258,263 @@ The server is then unreachable from the network entirely; connect to `127.0.0.1`
 
 ---
 
-## Use cases
+## Authorization core
 
-- **AI-powered mobile testing** — agents running QA flows on real devices
-- **Mobile RPA** — automating repetitive tasks across any Android app
-- **Accessibility automation** — assistive workflows
-- **App monitoring** — periodic UI state checks
-- **Cross-app workflows** — orchestrating actions across multiple apps
+> **Status: library only.** The components below are implemented and unit-tested, but no
+> production code path invokes them yet. They are documented here because they define the
+> model the remaining work is being built against — not because the app enforces them today.
 
-## Development
+The intended sequence for any privileged operation:
+
+```
+Device identity
+      ↓
+Pairing            ← establishes identity; grants nothing
+      ↓
+Authentication     ← pairing secret, during the connection upgrade
+      ↓
+Authorization      ← recomputed from stored grants, on every command
+      ↓
+Permission         ← one enum, no shadow system
+      ↓
+Command validation ← replay, clock skew, shape
+      ↓
+Execution
+      ↓
+Audit logging      ← sizes, never contents
+```
+
+The permissions that exist in code:
+
+| Permission | Meaning | Privileged |
+|---|---|---|
+| `REMOTE_VIEW` | Read device status, capabilities and metadata | no |
+| `REMOTE_KNOWLEDGE` | Search and read the knowledge graph *(the graph itself is not implemented)* | no |
+| `REMOTE_AUTOMATION` | Start and stop automations | yes |
+| `REMOTE_AI` | Ask the on-device AI subsystem questions *(subsystem not implemented)* | yes |
+| `REMOTE_FILES` | Read and write files the app can reach | yes |
+| `REMOTE_SETTINGS` | Change the app's own settings | yes |
+| `REMOTE_TERMINAL` | Open an interactive unprivileged shell session | yes |
+| `REMOTE_SHELL` | Execute unprivileged shell commands | yes |
+| `REMOTE_ROOT` | Execute commands as root | yes |
+| `AI_ROOT` | A **second** gate, required when the AI rather than a person initiates a root command | yes |
+
+Properties the code enforces, each covered by tests:
+
+- **Pairing is not authorization.** Pairing establishes identity and confers nothing.
+- **A grant is not a token the requester holds.** It is a record the device re-reads on
+  every command, so revocation takes effect on the next command rather than when some
+  cached credential lapses.
+- **No preset confers root.** Trust levels expand into individual grants at the moment they
+  are applied and are never consulted at execution time. No preset — including the one named
+  `ROOT` — includes `REMOTE_ROOT` or `AI_ROOT`.
+- **`REMOTE_SHELL` ≠ `REMOTE_ROOT` ≠ `AI_ROOT`.** An AI-initiated root command needs both
+  `REMOTE_ROOT` and `AI_ROOT`; holding one never implies the other.
+- **Single-use means single-use.** A `Once` grant is consumed on use — including the
+  `AI_ROOT` gate, which is spent alongside the root grant it authorises.
+- **Replay is rejected before authorization**, so a resent request cannot spend a
+  single-use grant simply by arriving twice.
+
+---
+
+## Privileged and root operations
+
+**DroidPilot Forge cannot root a device.** It can *use* elevated access that the device
+already provides, when the owner explicitly authorises the operation. On a device with no
+root provider, the app says so plainly rather than failing later at the point of use.
+
+Root detection is provider-agnostic: there is no check for any particular root manager, no
+hard-coded binary path, and no assumption about which implementation is installed. The probe
+asks whether an elevated shell can actually be obtained (`id -u` returning `0`) and reports
+what answered.
+
+There is deliberately **no blocklist of dangerous commands**. Once an owner has explicitly
+authorised root for a device, root commands from it are the feature working as intended; a
+blocklist would refuse legitimate administration while stopping nobody who can write the
+same thing another way, and its real cost is worse — it invites the belief that the list is
+the security boundary. The boundary is owner authorisation, device identity, and a live
+grant.
+
+Design and rationale: **[ROOT_AUTHORIZATION.md](ROOT_AUTHORIZATION.md)**.
+
+---
+
+## Operating modes
+
+Two modes are the project's intended shape. One exists; one does not.
+
+### Pilot Mode — *implemented*
+
+> *"Tell me what to do on this Android device, and I'll do it."*
+
+Direct device operation: launching apps, navigating interfaces, reading the UI tree,
+locating elements, dispatching gestures and text, pressing system keys, capturing the
+screen. This is what the app does today, and it is covered by instrumented tests that run on
+a real emulator in CI.
+
+### Developer Mode — *planned, not implemented*
+
+> *"Give me an objective, and I'll plan, build, test, diagnose, fix, and iterate."*
+
+The intended workflow:
+
+```
+Objective → Analyze → Plan → Inspect → Modify → Build → Install → Test → Diagnose → Fix → Rebuild → Retest
+```
+
+No part of this exists in the repository yet. One constraint is worth stating up front,
+because it shapes the design: Android ships no JDK, no Gradle and no compiler, and an app
+cannot install an APK without device-owner or root privileges. A build loop therefore
+belongs on a host that has the toolchain and the repository, with the device half — launch,
+drive, inspect, read logs — being what this project already does well.
+
+---
+
+## Building from source
+
+**Prerequisites**
+
+| Requirement | Version |
+|---|---|
+| JDK | 17 |
+| Android SDK | compileSdk 35 |
+| Android Gradle Plugin | 8.7.3 (via the Gradle wrapper) |
+| Kotlin | 2.0.21 |
+| minSdk / targetSdk | 30 / 35 |
+| Node.js | 20+ (MCP server) |
+
+**Android**
 
 ```bash
-# Android
 cd android
-./gradlew testDebugUnitTest    # unit tests
-./gradlew lintDebug            # lint
-./gradlew assembleDebug        # debug APK
-./gradlew assembleRelease      # release APK (see CONTRIBUTING.md for signing)
+./gradlew testDebugUnitTest        # unit tests
+./gradlew lintDebug lintRelease    # lint (abortOnError is on)
+./gradlew assembleDebug            # debug APK
+./gradlew assembleRelease          # release APK — unsigned unless credentials are supplied
+./gradlew connectedDebugAndroidTest # instrumented tests (needs a device or emulator)
+```
 
-# MCP server
+APK output paths:
+
+```
+android/app/build/outputs/apk/debug/app-debug.apk
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+Release signing is read from `DROIDPILOT_KEYSTORE_PATH`, `DROIDPILOT_KEYSTORE_PASSWORD`,
+`DROIDPILOT_KEY_ALIAS` and `DROIDPILOT_KEY_PASSWORD`, or from a local `keystore.properties`.
+Without them the release variant builds **unsigned** — it still exercises R8 and resource
+shrinking, but cannot be installed. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+**MCP server**
+
+```bash
 cd mcp-server
+npm install
 npm run typecheck
 npm test
 npm run build
 ```
 
-144 tests, none requiring a physical device. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-full workflow and [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together.
+---
+
+## Project structure
+
+```
+droidpilot/
+├── android/
+│   └── app/src/
+│       ├── main/kotlin/com/mobilemcp/pro/
+│       │   ├── automation/      # DeviceAutomator contract, UI node model, selectors
+│       │   ├── core/            # OperationResult, capabilities, network addresses
+│       │   │   ├── audit/       # AuditLogger            (library only)
+│       │   │   ├── permission/  # Authorization core     (library only)
+│       │   │   └── root/        # Root detection + shell (library only)
+│       │   ├── protocol/        # Wire protocol and serializers
+│       │   ├── security/        # Pairing secret, secure channel, auth gate
+│       │   ├── server/          # Control server, command dispatcher
+│       │   ├── service/         # Accessibility service, foreground service
+│       │   └── ui/              # MainActivity
+│       ├── test/                # JVM unit tests
+│       └── androidTest/         # Instrumented tests (real device / emulator)
+├── mcp-server/                  # TypeScript MCP server
+│   ├── src/                     # Client, secure channel, tools, server
+│   └── test/                    # Tests incl. a protocol-accurate fake device
+├── docs/images/                 # Documentation assets
+├── .github/workflows/ci.yml     # Build, test, lint, emulator, MCP server
+├── ARCHITECTURE.md
+├── SECURITY.md
+├── ROOT_AUTHORIZATION.md
+├── PHASE_2_ARCHITECTURE.md
+├── CONTRIBUTING.md
+├── CHANGELOG.md
+├── LICENSE
+└── README.md
+```
+
+---
+
+## Testing
+
+CI runs three jobs on every push: unit tests + lint + both APKs, instrumented tests on an
+API 30 emulator, and the MCP server's typecheck/test/build.
+
+The instrumented suite matters more than its size suggests. Accessibility node walking,
+gesture dispatch, screen capture and the Android Keystore round trip cannot be meaningfully
+faked off-device — Robolectric was evaluated for this and rejected, because its
+`AccessibilityNodeInfo` shadow returns `childCount = 0` and it reports
+`AndroidKeyStore not found`. Tests written against it would assert on fixtures while
+appearing to cover the riskiest code in the project.
+
+---
+
+## Limitations
+
+Stated plainly, because each one is a thing the project cannot do rather than has not done
+yet:
+
+- **It cannot root a device.** It uses elevated access a device already provides.
+- **It cannot install APKs from within the app.** Android requires device-owner or root
+  privileges for silent installation, and there is no ADB-to-self.
+- **It cannot read notifications.** That needs a `NotificationListenerService`, which this
+  build does not ship. The capability is reported as unavailable with that reason rather
+  than silently returning nothing.
+- **It cannot run a build toolchain on-device.** Android ships no JDK, Gradle or compiler.
+- **The pairing secret is the entire authority.** Anyone holding it is indistinguishable
+  from the legitimate client. There is no forward secrecy: traffic recorded now can be
+  decrypted by someone who learns the secret later. Regenerating the secret bounds that.
+- **The authorization core is not wired into the app.** It is tested, but it does not yet
+  guard anything at runtime.
+- **Screen capture is rate-limited by Android** to roughly one per second.
+
+---
+
+## Roadmap
+
+**Completed** — verified by tests in this repository
+
+- Accessibility-based device automation (Pilot Mode)
+- Authenticated, encrypted, replay-resistant transport
+- Keystore-backed pairing secret
+- MCP server and tool surface
+- Authorization, root-detection and audit components as tested libraries
+
+**In development**
+
+- Wiring the authorization core into a real remote-command path
+- Persistence for grants and the audit trail (both are currently in-memory)
+
+**Planned**
+
+- Device identity and device-to-device pairing
+- Remote device control and command bus, with an offline queue
+- Root sessions and root automations
+- Developer Mode build/test/fix loop, hosted off-device
+- Knowledge graph
+- AI provider abstraction, context retrieval and token budgeting
+- Remote and Developer UIs
+
+---
 
 ## Documentation
 
@@ -204,8 +522,12 @@ full workflow and [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit toge
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Layering, design decisions, testing strategy, limitations |
 | [SECURITY.md](SECURITY.md) | Authentication, encryption, permissions, threat model |
+| [ROOT_AUTHORIZATION.md](ROOT_AUTHORIZATION.md) | The root authorisation rules, grant durations, what is deliberately absent |
+| [PHASE_2_ARCHITECTURE.md](PHASE_2_ARCHITECTURE.md) | Audit of what exists, and the ordering for the remaining work |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Building, testing, release signing, conventions |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+
+---
 
 ## Tech stack
 
@@ -213,10 +535,30 @@ full workflow and [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit toge
 - **MCP server:** TypeScript, Node 20+, `@modelcontextprotocol/sdk`
 - **Transport:** WebSocket, authenticated and encrypted with AES-256-GCM
 
+---
+
 ## Contributing
 
 Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+If you add a feature, add it to the [status table](#implementation-status) with the evidence
+that it works. A row that claims more than the code delivers is a bug in this README.
+
+---
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE).
+
+---
+
+## Attribution
+
+DroidPilot Forge is a modified and expanded version of the **DroidPilot** project, with
+additional architecture and security work: an authorisation core, provider-agnostic root
+detection, an audit trail, and an instrumented test suite that runs on real Android.
+
+The original DroidPilot is MIT licensed, Copyright (c) 2026 youichi-uda. That copyright
+notice and the MIT permission notice are preserved in [LICENSE](LICENSE), as the licence
+requires. The Android application id remains `com.mobilemcp.pro` so that existing
+installations upgrade in place and keep their Accessibility grant and pairing secret.

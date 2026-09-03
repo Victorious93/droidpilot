@@ -48,6 +48,45 @@ class AuthorizationManagerTest {
         }
     }
 
+    /**
+     * A single-use AI_ROOT grant must be spent by the AI using it once.
+     *
+     * "Allow the model to do this once" is a distinct owner decision from "allow my laptop
+     * to do this once", and it is the more cautious of the two. If the AI gate is checked
+     * but never consumed, `GrantDuration.Once` on AI_ROOT silently means "for as long as
+     * REMOTE_ROOT lives" — which is the opposite of what the owner chose, on the one
+     * permission where being wrong is least recoverable.
+     */
+    @Test
+    fun `a single-use AI_ROOT grant is spent after one AI root command`() {
+        manager.grant(laptop, RemotePermission.REMOTE_ROOT, GrantDuration.UntilRevoked)
+        manager.grant(laptop, RemotePermission.AI_ROOT, GrantDuration.Once)
+
+        assertTrue(
+            "the first AI root command is what the owner authorised",
+            allowed(manager.authorize(laptop, RemotePermission.REMOTE_ROOT, Initiator.AI)),
+        )
+        assertEquals(
+            "the single-use AI authorisation must not survive its own use",
+            DenialReason.AI_ROOT_REQUIRED,
+            denialOf(manager.authorize(laptop, RemotePermission.REMOTE_ROOT, Initiator.AI)),
+        )
+    }
+
+    /** Spending the AI gate must not spend the human's separate root authorisation. */
+    @Test
+    fun `spending a single-use AI_ROOT leaves the human root grant usable`() {
+        manager.grant(laptop, RemotePermission.REMOTE_ROOT, GrantDuration.UntilRevoked)
+        manager.grant(laptop, RemotePermission.AI_ROOT, GrantDuration.Once)
+
+        manager.authorize(laptop, RemotePermission.REMOTE_ROOT, Initiator.AI)
+
+        assertTrue(
+            "the owner's own root access is a separate decision and is untouched",
+            allowed(manager.authorize(laptop, RemotePermission.REMOTE_ROOT, Initiator.REMOTE_DEVICE)),
+        )
+    }
+
     @Test
     fun `an unpaired device is refused even holding a grant for its id`() {
         manager.grant(stranger, RemotePermission.REMOTE_ROOT, GrantDuration.UntilRevoked)

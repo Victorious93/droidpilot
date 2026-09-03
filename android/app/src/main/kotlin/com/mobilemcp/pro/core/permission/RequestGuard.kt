@@ -17,6 +17,17 @@ class RequestGuard(
     private val maxSkewMillis: Long = DEFAULT_MAX_SKEW_MILLIS,
     /** How long an executed id is remembered. Must exceed [maxSkewMillis] to be sound. */
     private val rememberMillis: Long = DEFAULT_REMEMBER_MILLIS,
+    /**
+     * Hard ceiling on remembered ids.
+     *
+     * Without one, the set grows with every distinct id inside the window, and an
+     * authenticated peer can enlarge it without limit simply by sending requests. The
+     * ceiling is reached by refusing new requests rather than by evicting ids that are
+     * still inside their window: dropping an id early would silently stop protecting
+     * against the replay of exactly that request, which is the one thing this class exists
+     * to prevent. Refusing is visible and recoverable; forgetting is neither.
+     */
+    private val maxRemembered: Int = DEFAULT_MAX_REMEMBERED,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -62,6 +73,14 @@ class RequestGuard(
             return Verdict.Rejected("Request '$requestId' has already been executed")
         }
 
+        if (seen.size >= maxRemembered) {
+            return Verdict.Rejected(
+                "Too many privileged requests in the last ${rememberMillis / 1000}s to " +
+                    "guarantee replay protection; refusing rather than forgetting one. " +
+                    "Retry shortly.",
+            )
+        }
+
         seen[requestId] = now
         return Verdict.Fresh
     }
@@ -84,5 +103,8 @@ class RequestGuard(
     private companion object {
         const val DEFAULT_MAX_SKEW_MILLIS = 120_000L
         const val DEFAULT_REMEMBER_MILLIS = 600_000L
+
+        /** Far above any legitimate rate; low enough that the set cannot exhaust memory. */
+        const val DEFAULT_MAX_REMEMBERED = 20_000
     }
 }
