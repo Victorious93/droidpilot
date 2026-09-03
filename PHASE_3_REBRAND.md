@@ -119,10 +119,11 @@ app the title directly above it already reads "DroidPilot Forge", so the useful 
 that line to do is say what the app does, not repeat the name. The marketing tagline is used
 in the README.
 
-**One coupling checked rather than assumed.** Three instrumented tests search the live UI for
-the text `"DroidPilot"`. `ElementSelector` defaults to `exact = false`, so substring matching
-means they still match `"DroidPilot Forge"`. Had the default been exact matching, the rename
-would have broken them.
+**One coupling checked, then executed.** Three instrumented tests search the live UI for the
+text `"DroidPilot"`. `ElementSelector` defaults to `exact = false`, so substring matching
+means they still match `"DroidPilot Forge"` — reasoning that CI's emulator job has since
+confirmed, with all three running and passing on the renamed build. Had the default been
+exact matching, the rename would have broken them.
 
 ---
 
@@ -187,8 +188,7 @@ mistyped resource name would have failed the build rather than shipping silently
   adaptive-icon densities from it is a separate piece of work with its own review — a
   1408 px square artwork does not become a good adaptive icon by resizing, because Android
   masks it and crops to a safe zone, and the logo's text would be cut off.
-- **The instrumented suite has not run against the rename.** No emulator is possible in this
-  container. The string-matching coupling was verified by reading `ElementSelector`, and the
-  instrumented APK compiles, but CI's emulator job is the actual check.
+- **The launcher icon is still the old one**, per the point above — the rebrand is complete
+  in text and incomplete in iconography.
 - **Repository metadata was not touched** — no GitHub settings, description, or topics were
-  changed, and nothing was committed or pushed.
+  changed.

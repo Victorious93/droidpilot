@@ -116,25 +116,34 @@ robustness, not shell-injection resistance — there is no shell on this path to
 
 ---
 
-## Instrumented tests — not re-run in this session
+## Instrumented tests
 
-The 35 instrumented tests (18 accessibility, 9 end-to-end, 8 Android Keystore) last ran on
-CI against master's merge commit `69c6e4f`:
+Not runnable in the authoring container — no `/dev/kvm`, no `vmx`/`svm` CPU flag, and the
+emulator refuses arm64 images on an x86_64 host. CI's emulator job is the verification, and
+it has now run twice against these changes:
 
-```
-<testsuite tests="35" failures="0" errors="0" skipped="0" time="76.112">
-```
+| Commit | What it is | Result |
+|---|---|---|
+| `d702108` | the Phase 3 branch head | `tests="35" failures="0" errors="0" skipped="0" time="88.594"` |
+| `257dcd8` | master, after the merge | `tests="35" failures="0" errors="0" skipped="0" time="74.727"` |
 
-**They have not been run against the Phase 3 changes.** No emulator is possible in this
-container — there is no `/dev/kvm`, no `vmx`/`svm` CPU flag, and the emulator refuses arm64
-images on an x86_64 host. The instrumented APK compiles (`assembleDebugAndroidTest`
-succeeds), and the Phase 3 changes are confined to `core/` components that the instrumented
-suite does not exercise plus user-facing strings, but that is reasoning, not evidence. The
-emulator job on CI is the verification, and it has not run.
+Read from the uploaded results XML rather than the job's status badge, because a green badge
+does not distinguish "passed" from "never ran" — a distinction this project has already been
+caught by once, when a JUnit4 `initializationError` silently stopped eighteen tests from
+running while the report still said eighteen tests.
 
-One coupling was checked by hand rather than assumed: three instrumented assertions search
-for the visible text `"DroidPilot"`. `ElementSelector` defaults to `exact = false`, so
-substring matching means they still match the renamed label `"DroidPilot Forge"`.
+### The rename coupling, resolved by execution
+
+Three instrumented assertions search the live UI for the text `"DroidPilot"`, and the app
+label is now `"DroidPilot Forge"`. Before the run, the reasoning was that `ElementSelector`
+defaults to `exact = false`, so substring matching should still match. The run settles it —
+all three executed, with durations that show they did real work rather than short-circuiting:
+
+| Test | Time |
+|---|---|
+| `findsAnElementByItsVisibleText` | 3.30s |
+| `findsAnElementThatIsAlreadyPresent` | 3.51s |
+| `findElementOverTheWireLocatesRealUi` | 2.80s |
 
 ---
 
