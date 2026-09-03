@@ -22,8 +22,24 @@ import java.io.FileInputStream
  */
 object AccessibilityServiceHarness {
 
-    private const val ENABLE_TIMEOUT_MILLIS = 30_000L
+    // Generous, because a cold CI emulator has to start the app process and bind the
+    // service under software-assisted virtualisation. The cost of being wrong in this
+    // direction is a slower failure; the cost in the other is a red run that says nothing.
+    private const val ENABLE_TIMEOUT_MILLIS = 90_000L
+
+    // Once the first attempt has exhausted the full budget, the service is not coming. A
+    // later test still re-checks — the platform could in principle bind it late — but for
+    // seconds rather than minutes. Without this, every test in the suite waits the whole
+    // budget on the way to the same failure, and twenty-seven of them exceed the job's
+    // wall-clock limit, so a diagnosable failure turns into a timed-out runner with no
+    // report at all.
+    private const val RETRY_TIMEOUT_MILLIS = 5_000L
+
     private const val POLL_INTERVAL_MILLIS = 250L
+
+    /** The diagnosis from the first failed attempt, reused so later tests fail fast. */
+    @Volatile
+    private var firstFailure: String? = null
 
     /**
      * Enables the service and blocks until it has bound itself into [AutomatorRegistry].
@@ -37,20 +53,124 @@ object AccessibilityServiceHarness {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val component = "${context.packageName}/${DroidPilotAccessibilityService::class.java.name}"
 
-        shell("settings put secure enabled_accessibility_services $component")
-        shell("settings put secure accessibility_enabled 1")
+        // Before anything else: take the non-suppressing UiAutomation. Acquiring it is what
+        // decides whether the platform is willing to run accessibility services at all, so
+        // it has to happen before the service is asked to start rather than as a side
+        // effect of the first shell call. See [automation].
+        automation()
 
-        val deadline = System.currentTimeMillis() + ENABLE_TIMEOUT_MILLIS
+        val alreadyFailed = firstFailure != null
+        if (!alreadyFailed) {
+            shell("settings put secure enabled_accessibility_services $component")
+            shell("settings put secure accessibility_enabled 1")
+        }
+
+        val budget = if (alreadyFailed) RETRY_TIMEOUT_MILLIS else ENABLE_TIMEOUT_MILLIS
+        val deadline = System.currentTimeMillis() + budget
+        var systemEverReportedEnabled = false
         while (System.currentTimeMillis() < deadline) {
             AutomatorRegistry.get()?.let { return it }
+            if (systemReportsServiceEnabled(context)) systemEverReportedEnabled = true
             Thread.sleep(POLL_INTERVAL_MILLIS)
         }
 
-        error(
-            "The Accessibility service did not connect within ${ENABLE_TIMEOUT_MILLIS}ms. " +
-                "Expected component: $component. Currently enabled: " +
-                shell("settings get secure enabled_accessibility_services").trim()
-        )
+        firstFailure?.let { error(it) }
+
+        // A setup failure here is the single most likely reason for a red instrumented
+        // run, and it happens on a machine nobody is watching — so the message carries
+        // everything needed to diagnose it from the CI log alone, rather than requiring a
+        // second run with extra logging added.
+        val diagnosis = buildString {
+            appendLine("The Accessibility service did not connect within ${budget}ms.")
+            // The decisive distinction. If the system enabled the service but the
+            // registry stayed empty, the fault is in the app (onServiceConnected did
+            // not register). If the system never enabled it, the settings write did not
+            // take. These need entirely different fixes, so the message says which.
+            appendLine(
+                if (systemEverReportedEnabled) {
+                    "  DIAGNOSIS: the system DID enable the service, but it never registered " +
+                        "itself. Look at DroidPilotAccessibilityService.onServiceConnected."
+                } else {
+                    "  DIAGNOSIS: the settings name the service but the platform never " +
+                        "reported it as enabled, so it refused to run it. Check first that " +
+                        "nothing re-acquired UiAutomation without " +
+                        "FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES — a suppressing " +
+                        "connection produces exactly this, silently. Otherwise compare the " +
+                        "enabled-services string below against the expected component."
+                },
+            )
+            appendLine("  expected component : $component")
+            appendLine("  enabled services   : ${settingOrError("enabled_accessibility_services")}")
+            appendLine("  accessibility_enabled: ${settingOrError("accessibility_enabled")}")
+            appendLine("  test package       : ${InstrumentationRegistry.getInstrumentation().context.packageName}")
+            appendLine("  target package     : ${context.packageName}")
+            // The service registers itself into a process-global object, so the tests can
+            // only see it if the service is instantiated in this very process. Package
+            // names do not establish that; the process name does.
+            appendLine("  this process       : ${processName()} (pid ${android.os.Process.myPid()})")
+            appendLine("  --- logcat (accessibility + DroidPilot) ---")
+            append(recentLog())
+        }
+        firstFailure = diagnosis
+        error(diagnosis)
+    }
+
+    /** Asks the platform — not our own registry — whether it considers the service enabled. */
+    private fun systemReportsServiceEnabled(context: android.content.Context): Boolean = try {
+        val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        manager?.getEnabledAccessibilityServiceList(
+            android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK,
+        )?.any {
+            it.resolveInfo.serviceInfo.name == DroidPilotAccessibilityService::class.java.name
+        } == true
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * The last few hundred lines of logcat, filtered to the things that explain a failure
+     * to bind: the platform's own accessibility manager, the activity manager's service
+     * errors, and DroidPilot's own tag.
+     *
+     * Without this, a service that throws on the way up is invisible from the CI log —
+     * the only symptom is a timeout that looks identical to "the settings write did not
+     * take", and diagnosing it costs another ten-minute emulator run.
+     */
+    private fun recentLog(): String = try {
+        shell("logcat -d -t 400")
+            .lineSequence()
+            .filter { line ->
+                RELEVANT_LOG_TAGS.any { it in line }
+            }
+            .toList()
+            .takeLast(60)
+            .joinToString("\n") { "    $it" }
+            .ifBlank { "    (nothing matching in the last 400 lines)" }
+    } catch (e: Exception) {
+        "    (could not read logcat: ${e.javaClass.simpleName})"
+    }
+
+    private val RELEVANT_LOG_TAGS = listOf(
+        "AccessibilityManagerService",
+        "AccessibilityService",
+        "DroidPilot",
+        "ActivityManager",
+        "AndroidRuntime",
+        "PackageManager",
+    )
+
+    /** The name of the process these tests are running in, read from the kernel. */
+    private fun processName(): String = try {
+        java.io.File("/proc/self/cmdline").readBytes().decodeToString().trimEnd('\u0000')
+    } catch (e: Exception) {
+        "(unreadable: ${e.javaClass.simpleName})"
+    }
+
+    /** Reads a setting, returning the failure text rather than throwing from an error path. */
+    private fun settingOrError(key: String, secure: Boolean = true): String = try {
+        shell("settings get ${if (secure) "secure" else "global"} $key").trim().ifBlank { "(unset)" }
+    } catch (e: Exception) {
+        "(could not read: ${e.javaClass.simpleName})"
     }
 
     /** Disables the service again, so tests do not leak state into one another. */
@@ -60,6 +180,34 @@ object AccessibilityServiceHarness {
     }
 
     /**
+     * The instrumentation's [UiAutomation], acquired so that it does **not** switch every
+     * accessibility service off.
+     *
+     * This is the whole reason the suite could not enable the service. `UiAutomation`
+     * connects to the platform's accessibility manager as a privileged client, and by
+     * default that connection *suppresses* every other accessibility service for as long
+     * as it lives — the platform's own documentation for
+     * [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES] says so:
+     * "UiAutomation suppresses accessibility services by default. This flag requests that
+     * existing accessibility services continue to run, and that new ones may start."
+     *
+     * `InstrumentationRegistry.getInstrumentation().uiAutomation` is the no-flag form, so
+     * merely reaching for a shell here was enough to guarantee that the service written
+     * into `enabled_accessibility_services` a line later could never bind. The symptom is
+     * silent and misleading in exactly the way that costs a day: the settings read back
+     * correctly, the component name is right, the app process is the right one, and the
+     * platform logs nothing at all — it simply reports the service as not enabled.
+     *
+     * Passing the flag shuts down any existing connection and opens one that leaves
+     * accessibility services alone. This is a property of instrumentation only; nothing
+     * suppresses services on a device in a user's hands, so it is a test-harness defect
+     * rather than a product one.
+     */
+    private fun automation(): UiAutomation =
+        InstrumentationRegistry.getInstrumentation()
+            .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+
+    /**
      * Runs a shell command and returns its output.
      *
      * The returned descriptor must be drained and closed: `executeShellCommand` is
@@ -67,8 +215,7 @@ object AccessibilityServiceHarness {
      * make the settings write above racy.
      */
     private fun shell(command: String): String {
-        val automation: UiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val descriptor: ParcelFileDescriptor = automation.executeShellCommand(command)
+        val descriptor: ParcelFileDescriptor = automation().executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
             (stream as FileInputStream).readBytes().decodeToString()
         }

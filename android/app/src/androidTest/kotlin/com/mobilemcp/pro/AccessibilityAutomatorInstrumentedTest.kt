@@ -10,6 +10,7 @@ import com.mobilemcp.pro.automation.SystemKey
 import com.mobilemcp.pro.automation.UiNode
 import com.mobilemcp.pro.core.OperationResult
 import com.mobilemcp.pro.ui.MainActivity
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,6 +54,23 @@ class AccessibilityAutomatorInstrumentedTest {
         scenario = null
     }
 
+    /**
+     * Runs a coroutine test body.
+     *
+     * The lambda is typed `suspend CoroutineScope.() -> Unit`, which is the entire point:
+     * Kotlin coerces its final expression to Unit inside the lambda, so the enclosing test
+     * method is always `void`.
+     *
+     * Writing `fun aTest() = runBlocking { … }` instead is a trap. `runBlocking` returns
+     * whatever the block returns, so a body ending in an expression like
+     * `succeeding(automator.pressKey(BACK))` — which yields a String — compiles to a
+     * non-void method. JUnit4 requires test methods to return void and rejects the **whole
+     * class** with a single `initializationError`, so all eighteen tests here silently
+     * stopped running and the report named none of them. That is exactly what happened on
+     * the first emulator run.
+     */
+    private fun instrumentedTest(block: suspend CoroutineScope.() -> Unit) = runBlocking(block = block)
+
     private fun <T> succeeding(result: OperationResult<T>): T = when (result) {
         is OperationResult.Success -> result.value
         is OperationResult.Failure ->
@@ -62,7 +80,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // ------------------------------------------------------------- capabilities
 
     @Test
-    fun reportsTheCapabilitiesItActuallyHas() = runBlocking {
+    fun reportsTheCapabilitiesItActuallyHas() = instrumentedTest {
         val capabilities = automator.capabilityNames()
 
         assertTrue("accessibility must be reported once connected", "accessibility" in capabilities)
@@ -75,7 +93,7 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun reportsDeviceInformation() = runBlocking {
+    fun reportsDeviceInformation() = instrumentedTest {
         val info = succeeding(automator.deviceInfo())
 
         assertTrue("screen width should be positive", info.screenWidth > 0)
@@ -88,7 +106,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // ----------------------------------------------------------------- ui tree
 
     @Test
-    fun readsARealUiTree() = runBlocking {
+    fun readsARealUiTree() = instrumentedTest {
         val result = succeeding(automator.uiTree(maxDepth = 20, maxNodes = 3_000))
 
         assertTrue("a live screen should yield more than one node", result.nodeCount > 1)
@@ -107,10 +125,10 @@ class AccessibilityAutomatorInstrumentedTest {
      * had no budget and no truncation flag, so an enormous tree was silently partial.
      */
     @Test
-    fun respectsTheNodeBudgetAndReportsTruncation() = runBlocking {
+    fun respectsTheNodeBudgetAndReportsTruncation() = instrumentedTest {
         val full = succeeding(automator.uiTree(maxDepth = 20, maxNodes = 3_000))
         // Only meaningful if the screen is big enough to exceed a tiny budget.
-        if (full.nodeCount <= 3) return@runBlocking
+        if (full.nodeCount <= 3) return@instrumentedTest
 
         val limited = succeeding(automator.uiTree(maxDepth = 20, maxNodes = 3))
 
@@ -120,7 +138,7 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun limitsTreeDepth() = runBlocking {
+    fun limitsTreeDepth() = instrumentedTest {
         val shallow = succeeding(automator.uiTree(maxDepth = 0, maxNodes = 3_000))
         assertEquals("depth 0 should return the root alone", null, shallow.tree.children)
     }
@@ -128,7 +146,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // ---------------------------------------------------------------- selectors
 
     @Test
-    fun findsAnElementByItsVisibleText() = runBlocking {
+    fun findsAnElementByItsVisibleText() = instrumentedTest {
         val matches = succeeding(automator.findElements(ElementSelector(text = "DroidPilot"), maxResults = 10))
 
         assertTrue("the app title should be findable on its own screen", matches.isNotEmpty())
@@ -139,13 +157,13 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun honoursTheResultLimit() = runBlocking {
+    fun honoursTheResultLimit() = instrumentedTest {
         val matches = succeeding(automator.findElements(ElementSelector(className = "android"), maxResults = 2))
         assertTrue("maxResults must be respected", matches.size <= 2)
     }
 
     @Test
-    fun returnsNothingForAnElementThatIsNotPresent() = runBlocking {
+    fun returnsNothingForAnElementThatIsNotPresent() = instrumentedTest {
         val matches = succeeding(
             automator.findElements(ElementSelector(text = "no-such-element-4a91c7"), maxResults = 10)
         )
@@ -154,7 +172,7 @@ class AccessibilityAutomatorInstrumentedTest {
 
     /** Substring matching is the default; `exact` must genuinely narrow it. */
     @Test
-    fun exactMatchingIsNarrowerThanSubstringMatching() = runBlocking {
+    fun exactMatchingIsNarrowerThanSubstringMatching() = instrumentedTest {
         val substring = succeeding(automator.findElements(ElementSelector(text = "Droid"), maxResults = 20))
         val exact = succeeding(
             automator.findElements(ElementSelector(text = "Droid", exact = true), maxResults = 20)
@@ -172,7 +190,7 @@ class AccessibilityAutomatorInstrumentedTest {
      * no side effect on the server.
      */
     @Test
-    fun clicksARealElement() = runBlocking {
+    fun clicksARealElement() = instrumentedTest {
         val clicked = succeeding(automator.clickElement(ElementSelector(text = "Clear"), longPress = false))
         assertTrue(
             "the clicked node should be the one asked for",
@@ -182,7 +200,7 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun reportsNotFoundForAnElementThatDoesNotExist() = runBlocking {
+    fun reportsNotFoundForAnElementThatDoesNotExist() = instrumentedTest {
         val result = automator.clickElement(ElementSelector(text = "no-such-button-4a91c7"), longPress = false)
 
         assertTrue(result is OperationResult.Failure)
@@ -194,7 +212,7 @@ class AccessibilityAutomatorInstrumentedTest {
 
     /** Gesture dispatch through the real system, via the coroutine wrapper. */
     @Test
-    fun dispatchesRealGestures() = runBlocking {
+    fun dispatchesRealGestures() = instrumentedTest {
         val info = succeeding(automator.deviceInfo())
         val centreX = info.screenWidth / 2f
         val centreY = info.screenHeight / 2f
@@ -206,7 +224,7 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun performsGlobalActions() = runBlocking {
+    fun performsGlobalActions() = instrumentedTest {
         succeeding(automator.pressKey(SystemKey.HOME))
         Thread.sleep(SETTLE_MILLIS)
         succeeding(automator.pressKey(SystemKey.BACK))
@@ -215,7 +233,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // -------------------------------------------------------------- wait / poll
 
     @Test
-    fun findsAnElementThatIsAlreadyPresent() = runBlocking {
+    fun findsAnElementThatIsAlreadyPresent() = instrumentedTest {
         val result = succeeding(
             automator.waitForElement(ElementSelector(text = "DroidPilot"), timeoutMillis = 5_000)
         )
@@ -229,7 +247,7 @@ class AccessibilityAutomatorInstrumentedTest {
      * able to ask "did this appear?" and get "no" without an error.
      */
     @Test
-    fun timesOutCleanlyForAnElementThatNeverAppears() = runBlocking {
+    fun timesOutCleanlyForAnElementThatNeverAppears() = instrumentedTest {
         val started = System.currentTimeMillis()
         val result = succeeding(
             automator.waitForElement(ElementSelector(text = "never-appears-4a91c7"), timeoutMillis = 1_500)
@@ -244,7 +262,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // --------------------------------------------------------------- screenshot
 
     @Test
-    fun capturesTheScreen() = runBlocking {
+    fun capturesTheScreen() = instrumentedTest {
         val shot = succeeding(automator.screenshot(quality = 70, maxDimension = 1_200))
 
         assertEquals("jpeg", shot.format)
@@ -260,7 +278,7 @@ class AccessibilityAutomatorInstrumentedTest {
     }
 
     @Test
-    fun downscalesLargeCapturesAndSaysSo() = runBlocking {
+    fun downscalesLargeCapturesAndSaysSo() = instrumentedTest {
         val info = succeeding(automator.deviceInfo())
         val longestEdge = maxOf(info.screenWidth, info.screenHeight)
 
@@ -277,7 +295,7 @@ class AccessibilityAutomatorInstrumentedTest {
     // ------------------------------------------------------------------ focus
 
     @Test
-    fun reportsFocusStateWithoutFailing() = runBlocking {
+    fun reportsFocusStateWithoutFailing() = instrumentedTest {
         // Nothing is necessarily focused, so both answers are valid — what must not happen
         // is a failure. `null` means "nothing focused", which is information, not an error.
         val result = automator.focusedElement()

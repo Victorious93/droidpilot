@@ -75,7 +75,7 @@ class ControlServerTest {
         )
         server.start()
 
-        assertTrue("server did not start", started.await(10, TimeUnit.SECONDS))
+        assertTrue("server did not start", started.await(20, TimeUnit.SECONDS))
         port = server.port
     }
 
@@ -146,7 +146,14 @@ class ControlServerTest {
             send(channel!!.seal(payload.encodeToByteArray()))
         }
 
-        fun awaitResponse(timeoutMillis: Long = 5_000): CommandResponse? {
+        /**
+         * Deliberately generous. These are real sockets and real coroutine dispatch, and CI
+         * runners are slower and far more contended than a developer machine — a budget
+         * that only just suffices here becomes an intermittently red master there. Raising
+         * the ceiling costs nothing when the test passes and weakens no assertion; the test
+         * still fails if the response never arrives.
+         */
+        fun awaitResponse(timeoutMillis: Long = 20_000): CommandResponse? {
             val deadline = System.currentTimeMillis() + timeoutMillis
             while (System.currentTimeMillis() < deadline) {
                 responses.poll()?.let { return it }
@@ -158,8 +165,8 @@ class ControlServerTest {
 
     private fun connectedClient(): TestClient =
         TestClient(PairingSecret.encode(secret)).also {
-            it.connectBlocking(10, TimeUnit.SECONDS)
-            assertTrue("handshake did not complete", it.helloReceived.await(10, TimeUnit.SECONDS))
+            it.connectBlocking(20, TimeUnit.SECONDS)
+            assertTrue("handshake did not complete", it.helloReceived.await(20, TimeUnit.SECONDS))
         }
 
     // -------------------------------------------------------------- happy path
@@ -251,8 +258,8 @@ class ControlServerTest {
         val wrong = PairingSecret.encode(ByteArray(32) { 0x42 })
         val client = TestClient(wrong)
 
-        client.connectBlocking(10, TimeUnit.SECONDS)
-        assertTrue("client should have been dropped", client.closed.await(10, TimeUnit.SECONDS))
+        client.connectBlocking(20, TimeUnit.SECONDS)
+        assertTrue("client should have been dropped", client.closed.await(20, TimeUnit.SECONDS))
 
         assertNull("no session key may be derived", client.channel)
         assertNull("no hello may be delivered", client.hello)
@@ -263,8 +270,8 @@ class ControlServerTest {
     fun `a client presenting no secret at all is refused`() {
         val client = TestClient(null)
 
-        client.connectBlocking(10, TimeUnit.SECONDS)
-        assertTrue(client.closed.await(10, TimeUnit.SECONDS))
+        client.connectBlocking(20, TimeUnit.SECONDS)
+        assertTrue(client.closed.await(20, TimeUnit.SECONDS))
 
         assertNull(client.channel)
         assertNull(client.hello)
@@ -275,8 +282,8 @@ class ControlServerTest {
     fun `a malformed authorization header is refused`() {
         val client = TestClient("this is not base64 at all !!!")
 
-        client.connectBlocking(10, TimeUnit.SECONDS)
-        assertTrue(client.closed.await(10, TimeUnit.SECONDS))
+        client.connectBlocking(20, TimeUnit.SECONDS)
+        assertTrue(client.closed.await(20, TimeUnit.SECONDS))
         assertNull(client.hello)
     }
 
@@ -284,8 +291,8 @@ class ControlServerTest {
     fun `repeated failures are logged and eventually locked out`() {
         repeat(6) {
             TestClient(PairingSecret.encode(ByteArray(32) { 0x7A })).apply {
-                connectBlocking(5, TimeUnit.SECONDS)
-                closed.await(5, TimeUnit.SECONDS)
+                connectBlocking(20, TimeUnit.SECONDS)
+                closed.await(20, TimeUnit.SECONDS)
             }
         }
 
@@ -307,7 +314,7 @@ class ControlServerTest {
 
         client.send("""{"id":"x","command":"tap","params":{"x":1,"y":1}}""")
 
-        assertTrue("connection should have been closed", client.closed.await(10, TimeUnit.SECONDS))
+        assertTrue("connection should have been closed", client.closed.await(20, TimeUnit.SECONDS))
         assertTrue(serverLogs.any { it.contains("unencrypted frame") })
     }
 
@@ -321,7 +328,7 @@ class ControlServerTest {
 
         client.send(record) // Byte-identical replay.
 
-        assertTrue("connection should have been closed", client.closed.await(10, TimeUnit.SECONDS))
+        assertTrue("connection should have been closed", client.closed.await(20, TimeUnit.SECONDS))
         assertTrue(serverLogs.any { it.contains("failed authentication or replayed") })
     }
 
@@ -332,7 +339,7 @@ class ControlServerTest {
         // Correct length and structure, but not produced with the session key.
         client.send(ByteArray(64) { 0xEE.toByte() })
 
-        assertTrue(client.closed.await(10, TimeUnit.SECONDS))
+        assertTrue(client.closed.await(20, TimeUnit.SECONDS))
     }
 
     @Test
@@ -373,15 +380,57 @@ class ControlServerTest {
             client.sendCommand("ping-1", "ping")
 
             // The ping must come back while the waits are still outstanding.
-            val deadline = System.currentTimeMillis() + 10_000
+            val deadline = System.currentTimeMillis() + 25_000
             var pong: CommandResponse? = null
             while (System.currentTimeMillis() < deadline && pong == null) {
                 pong = client.responses.poll()?.takeIf { it.id == "ping-1" }
                 Thread.sleep(20)
             }
 
+            assertNull("the client rejected a frame: ${client.failed}", client.failed)
             assertNotNull("ping must be answered while long waits are in flight", pong)
             assertTrue(pong!!.success)
+        } finally {
+            client.closeBlocking()
+        }
+    }
+
+    /**
+     * Every response must reach the client, including when several are produced at once.
+     *
+     * The channel numbers records with a counter and the peer requires that counter to be
+     * strictly increasing — which is what makes a replayed command impossible. Sealing was
+     * synchronised but the socket write was not, so two responses could be numbered n and
+     * n+1 and then written in the opposite order; the peer discarded the one that arrived
+     * late, and a client silently never received one of its answers. That is what turned
+     * the concurrency test above intermittently red on CI.
+     *
+     * The delay is what makes this deterministic rather than lucky: every command is held
+     * for the same interval and released together, so the responses genuinely contend.
+     */
+    @Test
+    fun `responses produced simultaneously all reach the client`() {
+        val client = connectedClient()
+        try {
+            automator.artificialDelayMillis = 300
+
+            // Matches the server's concurrency ceiling, so all of them are genuinely in
+            // flight together. The exact number is not the point — that they overlap is.
+            val count = 8
+            repeat(count) { i -> client.sendCommand("c-$i", "get_device_info") }
+
+            val seen = mutableSetOf<String>()
+            val deadline = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < deadline && seen.size < count) {
+                client.responses.poll()?.let { seen += it.id }
+                Thread.sleep(10)
+            }
+
+            assertNull(
+                "the client rejected a response frame, so records arrived out of counter order",
+                client.failed,
+            )
+            assertEquals("every response must arrive", count, seen.size)
         } finally {
             client.closeBlocking()
         }
