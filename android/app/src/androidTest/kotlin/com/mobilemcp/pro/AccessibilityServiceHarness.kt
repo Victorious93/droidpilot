@@ -22,7 +22,10 @@ import java.io.FileInputStream
  */
 object AccessibilityServiceHarness {
 
-    private const val ENABLE_TIMEOUT_MILLIS = 30_000L
+    // Generous, because a cold CI emulator has to start the app process and bind the
+    // service under software-assisted virtualisation. The cost of being wrong in this
+    // direction is a slower failure; the cost in the other is a red run that says nothing.
+    private const val ENABLE_TIMEOUT_MILLIS = 90_000L
     private const val POLL_INTERVAL_MILLIS = 250L
 
     /**
@@ -41,8 +44,10 @@ object AccessibilityServiceHarness {
         shell("settings put secure accessibility_enabled 1")
 
         val deadline = System.currentTimeMillis() + ENABLE_TIMEOUT_MILLIS
+        var systemEverReportedEnabled = false
         while (System.currentTimeMillis() < deadline) {
             AutomatorRegistry.get()?.let { return it }
+            if (systemReportsServiceEnabled(context)) systemEverReportedEnabled = true
             Thread.sleep(POLL_INTERVAL_MILLIS)
         }
 
@@ -53,6 +58,19 @@ object AccessibilityServiceHarness {
         error(
             buildString {
                 appendLine("The Accessibility service did not connect within ${ENABLE_TIMEOUT_MILLIS}ms.")
+                // The decisive distinction. If the system enabled the service but the
+                // registry stayed empty, the fault is in the app (onServiceConnected did
+                // not register). If the system never enabled it, the settings write did not
+                // take. These need entirely different fixes, so the message says which.
+                appendLine(
+                    if (systemEverReportedEnabled) {
+                        "  DIAGNOSIS: the system DID enable the service, but it never registered " +
+                            "itself. Look at DroidPilotAccessibilityService.onServiceConnected."
+                    } else {
+                        "  DIAGNOSIS: the system never reported the service as enabled, so the " +
+                            "settings write did not take effect."
+                    },
+                )
                 appendLine("  expected component : $component")
                 appendLine("  enabled services   : ${settingOrError("enabled_accessibility_services")}")
                 appendLine("  accessibility_enabled: ${settingOrError("accessibility_enabled")}")
@@ -61,6 +79,18 @@ object AccessibilityServiceHarness {
                 append("  installed services : ${settingOrError("enabled_accessibility_services", secure = false)}")
             },
         )
+    }
+
+    /** Asks the platform — not our own registry — whether it considers the service enabled. */
+    private fun systemReportsServiceEnabled(context: android.content.Context): Boolean = try {
+        val manager = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        manager?.getEnabledAccessibilityServiceList(
+            android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK,
+        )?.any {
+            it.resolveInfo.serviceInfo.name == DroidPilotAccessibilityService::class.java.name
+        } == true
+    } catch (e: Exception) {
+        false
     }
 
     /** Reads a setting, returning the failure text rather than throwing from an error path. */

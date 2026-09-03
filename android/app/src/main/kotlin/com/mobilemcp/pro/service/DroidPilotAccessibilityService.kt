@@ -68,8 +68,28 @@ class DroidPilotAccessibilityService : AccessibilityService(), DeviceAutomator {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        capabilities = probeCapabilities()
+
+        // Register before probing, and never let probing prevent registration.
+        //
+        // The previous order ran `probeCapabilities()` first, so anything it threw left the
+        // service connected but absent from the registry — permanently invisible to the
+        // rest of the app, with no error surfaced anywhere. A connected service must be
+        // usable; failing to work out what it can do is a much smaller problem than not
+        // being reachable at all, and is reported through the capability report instead.
         AutomatorRegistry.bind(this)
+
+        capabilities = try {
+            probeCapabilities()
+        } catch (e: Exception) {
+            Log.e(TAG, "Capability probe failed; continuing with accessibility only", e)
+            CapabilityReport(
+                available = setOf(Capability.ACCESSIBILITY),
+                reasons = Capability.entries
+                    .filter { it != Capability.ACCESSIBILITY }
+                    .associateWith { "Capability probing failed: ${e.javaClass.simpleName}" },
+            )
+        }
+
         Log.i(TAG, "Connected. Capabilities: ${capabilities.wireNames()}")
     }
 
