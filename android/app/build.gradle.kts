@@ -139,6 +139,17 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.java.websocket)
 
+    // Instrumented tests. These are the only tests that exercise the Accessibility layer,
+    // the Android Keystore and real gesture dispatch — none of which can be meaningfully
+    // faked. They require an emulator or device; CI runs them on one.
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.uiautomator)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.junit)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
