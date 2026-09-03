@@ -171,7 +171,9 @@ See `SECURITY.md` for the cryptographic construction and threat model.
 
 ## Testing
 
-144 tests, none requiring a device.
+179 tests: 144 that run anywhere, and 35 instrumented tests that need a device or emulator.
+
+### Off-device (144)
 
 | Suite | Tests | Covers |
 |---|---|---|
@@ -183,6 +185,27 @@ See `SECURITY.md` for the cryptographic construction and threat model.
 | `PairingSecretTest` | 10 | Encoding, constant-time comparison, fingerprints |
 | `ElementSelectorTest` | 10 | Matching semantics |
 | Node suites | 38 | Channel, pairing URIs, and the client against a fake device over a real socket |
+
+### On-device (35)
+
+These run on an emulator in CI, and cover the layers that have no honest substitute.
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `AccessibilityAutomatorInstrumentedTest` | 18 | Node walking, selectors, gesture dispatch, global actions, screen capture, node budget and truncation, wait/timeout |
+| `EndToEndInstrumentedTest` | 9 | The whole stack on a device: handshake, auth rejection, replay rejection, and commands returning real screen data |
+| `PairingSecretStoreInstrumentedTest` | 8 | The real Android Keystore: wrap, persist, reload, regenerate, and that the stored form is not plaintext |
+
+Faking any of this was considered and rejected. Robolectric reports `KeyStoreException:
+AndroidKeyStore not found`, and its `AccessibilityNodeInfo` shadow returns `childCount = 0`
+and `text = null` — so a test written against it asserts on fixtures while appearing to
+cover the riskiest code in the project. Coverage that is not real is worse than none,
+because it retires a risk that is still there.
+
+`AccessibilityServiceHarness` enables the service from inside the test process via
+`UiAutomation.executeShellCommand`, rather than from a CI step: a later `installDebug`
+would undo a setting written outside the test. It has no skip-if-unavailable path, so a
+service that fails to connect fails the suite instead of quietly passing it.
 
 Two are worth singling out.
 
@@ -227,9 +250,6 @@ buys nothing here.
 
 ## Known limitations
 
-- **No instrumented tests.** Everything touching `AccessibilityService` — node walking,
-  gesture dispatch, screenshot capture, capability probing — is verified by reading, not by
-  running. This is the largest gap in the project. It needs a device or an emulator in CI.
 - **No forward secrecy.** See `SECURITY.md`.
 - **No notification access.** Needs a `NotificationListenerService`.
 - **Single device per MCP server instance.**
@@ -238,7 +258,6 @@ buys nothing here.
 
 The layering makes each of these a local change rather than a rewrite:
 
-- **Instrumented tests** on an emulator in CI — the highest-value next step by a distance.
 - **`NotificationListenerService`**, turning `NOTIFICATION_ACCESS` into a real capability.
 - **Ephemeral ECDH** at handshake, adding forward secrecy without changing the framing.
 - **Compose UI**, isolated behind `ServerController` today.

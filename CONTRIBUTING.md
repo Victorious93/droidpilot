@@ -22,6 +22,15 @@ cd android
 ./gradlew assembleDebug
 ./gradlew assembleRelease
 
+# Instrumented tests — needs a connected device or a running emulator.
+# These cover the Accessibility layer and the real Android Keystore, which have no
+# honest off-device substitute. CI runs them on an API 30 emulator.
+./gradlew connectedDebugAndroidTest
+
+# Compiles the instrumented test APK without needing a device — worth running before
+# pushing, since it catches every compile error in the suite up front.
+./gradlew assembleDebugAndroidTest
+
 # MCP server
 cd mcp-server
 npm ci
@@ -108,11 +117,18 @@ Two suites deserve care when touched:
   because unit tests and the Node fake device between them missed a bug that made the
   server reject every client. Keep it running against the real thing.
 
-Tests must not require a physical device. Use `FakeDeviceAutomator` for the Android side and
-`FakeDevice` for the Node side.
+Prefer off-device tests: use `FakeDeviceAutomator` for the Android side and `FakeDevice` for
+the Node side. They run in seconds and on every change.
 
-If a change genuinely cannot be covered without hardware, say so in the pull request rather
-than adding a test that only appears to check it.
+Put a test in `androidTest/` only when it genuinely needs a real system — the Accessibility
+layer, gesture dispatch, screen capture, and the Android Keystore all do. Do **not** reach
+for Robolectric to fake those: its Keystore is absent and its `AccessibilityNodeInfo`
+shadow returns empty values, so such a test asserts on fixtures while looking like coverage
+of the riskiest code in the project.
+
+Instrumented tests must fail loudly when their preconditions are unmet. A test that skips
+itself because the Accessibility service did not connect reports coverage that does not
+exist, which is worse than having no test at all.
 
 ## Adding a command
 

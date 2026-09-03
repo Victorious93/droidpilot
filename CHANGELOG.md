@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **35 instrumented tests**, closing the project's largest verification gap. Everything
+  touching `AccessibilityService` and the Android Keystore was previously verified by
+  reading the code, not by running it.
+  - `AccessibilityAutomatorInstrumentedTest` (18) — node walking, selectors, gesture
+    dispatch, global actions, screen capture, node budgeting and truncation, wait/timeout.
+  - `EndToEndInstrumentedTest` (9) — the whole stack on a device: handshake, authentication
+    rejection, replay rejection, and commands returning real screen data.
+  - `PairingSecretStoreInstrumentedTest` (8) — the real Android Keystore round trip, and
+    that the stored form is not plaintext.
+- A GitHub Actions job running the instrumented suite on an API 30 emulator, so the
+  Accessibility layer is checked on every push rather than only by inspection.
+- `AccessibilityServiceHarness`, which enables the service from inside the test process via
+  `UiAutomation` shell privileges. Doing it there rather than in a CI step matters: a later
+  `installDebug` would undo a setting written outside the test.
+
+### Notes
+
+Robolectric was evaluated for this and rejected. It reports `KeyStoreException:
+AndroidKeyStore not found`, and its `AccessibilityNodeInfo` shadow returns `childCount = 0`
+and `text = null` — so tests written against it would assert on fixtures while appearing to
+cover the riskiest code in the project. Coverage that is not real is worse than none.
+
 ## [2.0.0] — 2026-09-02
 
 A security and reliability release. **The wire protocol is not backward compatible**: a 1.0
