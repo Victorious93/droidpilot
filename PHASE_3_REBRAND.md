@@ -58,8 +58,14 @@ and describes this work as a modified and expanded version rather than an origin
 |---|---|
 | Source | uploaded JPEG, 1408 × 1408, RGB |
 | Stored as | `docs/images/droidpilot-forge-logo.png` |
-| Format | PNG, 512 × 512, RGB, 364 KB |
+| Format | PNG, 512 × 512, RGB, 367 KB |
 | README reference | `<img src="docs/images/droidpilot-forge-logo.png" width="220">` |
+
+The asset was replaced once after the initial rebrand. The first logo's wordmark read
+"droidpilot", so the README was displaying the *old* project name in the one place a reader
+looks first. The replacement carries the "droidpilot forge" wordmark. It reuses the same
+filename deliberately: the README, and anything else pointing at the path, keep working
+without an edit, and there is no second copy to drift out of date.
 
 Resized rather than stored at source resolution: the full-size PNG was 2.3 MB for an asset
 the README renders at 220 px, and 512 px still gives a 2× margin for high-density displays.
