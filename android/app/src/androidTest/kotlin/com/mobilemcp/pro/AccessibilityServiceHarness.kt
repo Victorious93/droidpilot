@@ -53,6 +53,12 @@ object AccessibilityServiceHarness {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val component = "${context.packageName}/${DroidPilotAccessibilityService::class.java.name}"
 
+        // Before anything else: take the non-suppressing UiAutomation. Acquiring it is what
+        // decides whether the platform is willing to run accessibility services at all, so
+        // it has to happen before the service is asked to start rather than as a side
+        // effect of the first shell call. See [automation].
+        automation()
+
         val alreadyFailed = firstFailure != null
         if (!alreadyFailed) {
             shell("settings put secure enabled_accessibility_services $component")
@@ -85,8 +91,12 @@ object AccessibilityServiceHarness {
                     "  DIAGNOSIS: the system DID enable the service, but it never registered " +
                         "itself. Look at DroidPilotAccessibilityService.onServiceConnected."
                 } else {
-                    "  DIAGNOSIS: the system never reported the service as enabled, so the " +
-                        "settings write did not take effect."
+                    "  DIAGNOSIS: the settings name the service but the platform never " +
+                        "reported it as enabled, so it refused to run it. Check first that " +
+                        "nothing re-acquired UiAutomation without " +
+                        "FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES — a suppressing " +
+                        "connection produces exactly this, silently. Otherwise compare the " +
+                        "enabled-services string below against the expected component."
                 },
             )
             appendLine("  expected component : $component")
@@ -170,6 +180,34 @@ object AccessibilityServiceHarness {
     }
 
     /**
+     * The instrumentation's [UiAutomation], acquired so that it does **not** switch every
+     * accessibility service off.
+     *
+     * This is the whole reason the suite could not enable the service. `UiAutomation`
+     * connects to the platform's accessibility manager as a privileged client, and by
+     * default that connection *suppresses* every other accessibility service for as long
+     * as it lives — the platform's own documentation for
+     * [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES] says so:
+     * "UiAutomation suppresses accessibility services by default. This flag requests that
+     * existing accessibility services continue to run, and that new ones may start."
+     *
+     * `InstrumentationRegistry.getInstrumentation().uiAutomation` is the no-flag form, so
+     * merely reaching for a shell here was enough to guarantee that the service written
+     * into `enabled_accessibility_services` a line later could never bind. The symptom is
+     * silent and misleading in exactly the way that costs a day: the settings read back
+     * correctly, the component name is right, the app process is the right one, and the
+     * platform logs nothing at all — it simply reports the service as not enabled.
+     *
+     * Passing the flag shuts down any existing connection and opens one that leaves
+     * accessibility services alone. This is a property of instrumentation only; nothing
+     * suppresses services on a device in a user's hands, so it is a test-harness defect
+     * rather than a product one.
+     */
+    private fun automation(): UiAutomation =
+        InstrumentationRegistry.getInstrumentation()
+            .getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+
+    /**
      * Runs a shell command and returns its output.
      *
      * The returned descriptor must be drained and closed: `executeShellCommand` is
@@ -177,8 +215,7 @@ object AccessibilityServiceHarness {
      * make the settings write above racy.
      */
     private fun shell(command: String): String {
-        val automation: UiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val descriptor: ParcelFileDescriptor = automation.executeShellCommand(command)
+        val descriptor: ParcelFileDescriptor = automation().executeShellCommand(command)
         return ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { stream ->
             (stream as FileInputStream).readBytes().decodeToString()
         }
