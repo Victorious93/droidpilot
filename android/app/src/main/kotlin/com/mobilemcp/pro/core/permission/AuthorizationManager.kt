@@ -108,18 +108,28 @@ class AuthorizationManager(
             return AuthorizationDecision.Denied(DenialReason.UNKNOWN_DEVICE, permission)
         }
 
-        // Root initiated by the model needs AI_ROOT as well as REMOTE_ROOT. Checked first,
-        // and without consuming anything, so a refusal here cannot spend a single-use root
-        // grant the owner issued for their own use.
-        if (initiator == Initiator.AI && permission == RemotePermission.REMOTE_ROOT) {
-            val aiDecision = evaluateSingle(deviceId, RemotePermission.AI_ROOT)
-            if (aiDecision !is AuthorizationDecision.Allowed) {
-                return AuthorizationDecision.Denied(DenialReason.AI_ROOT_REQUIRED, permission)
+        // Root initiated by the model needs AI_ROOT as well as REMOTE_ROOT. Evaluated first
+        // and without consuming, so a refusal at the second gate cannot spend a single-use
+        // grant — but the grant is held onto, because it has to be spent if the command is
+        // ultimately allowed.
+        val aiGate: Grant? =
+            if (initiator == Initiator.AI && permission == RemotePermission.REMOTE_ROOT) {
+                when (val aiDecision = evaluateSingle(deviceId, RemotePermission.AI_ROOT)) {
+                    is AuthorizationDecision.Allowed -> aiDecision.grant
+                    is AuthorizationDecision.Denied ->
+                        return AuthorizationDecision.Denied(DenialReason.AI_ROOT_REQUIRED, permission)
+                }
+            } else {
+                null
             }
-        }
 
         return when (val decision = evaluateSingle(deviceId, permission)) {
             is AuthorizationDecision.Allowed -> {
+                // Both gates are spent, and only once the command is actually authorised.
+                // Omitting the first is how "allow the model to do this once" silently
+                // became "for as long as REMOTE_ROOT lives" — the opposite of the owner's
+                // choice, on the permission where being wrong is least recoverable.
+                aiGate?.let(::consumeIfSingleUse)
                 consumeIfSingleUse(decision.grant)
                 decision
             }

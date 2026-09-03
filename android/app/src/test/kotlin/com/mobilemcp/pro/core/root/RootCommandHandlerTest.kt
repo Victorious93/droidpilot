@@ -87,6 +87,44 @@ class RootCommandHandlerTest {
         timestampMillis = now,
     )
 
+    // -------------------------------------------------------------- audit accuracy
+
+    /**
+     * An audit log that says a root command ran when it did not is worse than no log.
+     *
+     * The owner reads this trail to answer "what ran as root on my phone". A refusal
+     * recorded as ROOT_EXECUTED puts a command in that answer that never executed, and it
+     * is indistinguishable from one that did except by reading the detail text.
+     */
+    @Test
+    fun `a command refused for want of root is not recorded as having executed`() = runTest {
+        authorization.grant(laptop, RemotePermission.REMOTE_ROOT, GrantDuration.UntilRevoked)
+        executor.rootAvailable = false
+
+        assertTrue(handler.handle(request()) is RootCommandHandler.Outcome.Refused)
+        assertTrue("nothing ran", executor.realCommands().isEmpty())
+        assertTrue(
+            "a refusal must not appear in the trail as an execution",
+            audit.eventsOfType(AuditEventType.ROOT_EXECUTED).isEmpty(),
+        )
+        assertFalse(
+            "the refusal must still be recorded",
+            audit.eventsOfType(AuditEventType.AUTHORIZATION_DENIED).isEmpty(),
+        )
+    }
+
+    /** Every refusal is recorded. A silent one is a gap in the trail. */
+    @Test
+    fun `an empty command is refused and recorded`() = runTest {
+        authorization.grant(laptop, RemotePermission.REMOTE_ROOT, GrantDuration.UntilRevoked)
+
+        assertTrue(handler.handle(request(command = "   ")) is RootCommandHandler.Outcome.Refused)
+        assertFalse(
+            "a refusal that leaves no audit record is invisible to the owner",
+            audit.eventsOfType(AuditEventType.AUTHORIZATION_DENIED).isEmpty(),
+        )
+    }
+
     // ------------------------------------------------------------------- refusals
 
     @Test

@@ -94,4 +94,39 @@ class RequestGuardTest {
         now += 300_000
         assertTrue("still inside the retention window", g.admit("req-1", now) is RequestGuard.Verdict.Rejected)
     }
+
+    /**
+     * The set of remembered ids is bounded, and reaching the bound fails closed.
+     *
+     * An authenticated peer can otherwise grow it without limit just by sending distinct
+     * ids inside the window. Evicting a still-valid id to make room would silently drop
+     * replay protection for that exact request, so the guard refuses instead — visible and
+     * recoverable, rather than quietly weaker.
+     */
+    @Test
+    fun `the guard refuses rather than forgetting an id that is still within its window`() {
+        val guard = RequestGuard(maxRemembered = 3, clock = { now })
+
+        repeat(3) { assertTrue(guard.admit("req-$it", now) is RequestGuard.Verdict.Fresh) }
+
+        val verdict = guard.admit("req-overflow", now)
+        assertTrue("the guard must fail closed at its ceiling", verdict is RequestGuard.Verdict.Rejected)
+        assertEquals("no id may be forgotten to make room", 3, guard.size())
+
+        // The earlier ids are still protected, which is the property the refusal buys.
+        assertTrue(guard.admit("req-0", now) is RequestGuard.Verdict.Rejected)
+    }
+
+    /** Once the window passes, capacity returns without the operator doing anything. */
+    @Test
+    fun `capacity is recovered as ids age out`() {
+        val guard = RequestGuard(maxRemembered = 2, clock = { now })
+
+        assertTrue(guard.admit("a", now) is RequestGuard.Verdict.Fresh)
+        assertTrue(guard.admit("b", now) is RequestGuard.Verdict.Fresh)
+        assertTrue(guard.admit("c", now) is RequestGuard.Verdict.Rejected)
+
+        now += 700_000L
+        assertTrue("expired ids free their slots", guard.admit("c", now) is RequestGuard.Verdict.Fresh)
+    }
 }

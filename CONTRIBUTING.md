@@ -17,7 +17,7 @@ sdk.dir=/path/to/Android/sdk
 ```bash
 # Android
 cd android
-./gradlew testDebugUnitTest     # 106 unit tests, no device needed
+./gradlew testDebugUnitTest     # 187 unit tests, no device needed
 ./gradlew lintDebug lintRelease # lint; abortOnError is on
 ./gradlew assembleDebug
 ./gradlew assembleRelease

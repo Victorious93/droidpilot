@@ -22,6 +22,9 @@ enum class AuditEventType {
     ROOT_SESSION_CLOSED,
     REMOTE_CONNECTED,
     REMOTE_DISCONNECTED,
+
+    /** The owner emptied the trail. Its own type: clearing a log is not a revocation. */
+    AUDIT_CLEARED,
 }
 
 /**
@@ -105,9 +108,10 @@ class AuditLogger(
         stderrBytes: Int? = null,
         detail: String? = null,
     ): AuditEvent {
+        val now = clock()
         val event = AuditEvent(
-            id = "audit-${clock()}-${sequence++}",
-            timestampMillis = clock(),
+            id = "audit-$now-${sequence++}",
+            timestampMillis = now,
             type = type,
             deviceId = deviceId,
             deviceName = deviceName,
@@ -138,7 +142,7 @@ class AuditLogger(
     @Synchronized
     fun clear() {
         _events.value = emptyList()
-        record(AuditEventType.PERMISSION_REVOKED, detail = "Audit log cleared by owner")
+        record(AuditEventType.AUDIT_CLEARED, detail = "Audit log cleared by owner")
     }
 
     /** Plain-text export for sharing or filing a bug. Subject to the same redaction. */

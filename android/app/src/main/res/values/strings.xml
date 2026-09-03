@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">DroidPilot</string>
+    <string name="app_name">DroidPilot Forge</string>
     <string name="app_tagline">Accessibility-based device automation for MCP clients</string>
 
     <!--
@@ -9,11 +9,11 @@
       needs in order to give informed consent — and because an accessibility service that
       understates its reach is one users are right to distrust.
     -->
-    <string name="accessibility_service_description">DroidPilot reads the on-screen content of other apps and performs taps, swipes and text input on your behalf. While the DroidPilot server is running, these actions can be requested by an AI assistant on your local network that you have paired with this device using its pairing secret. Nothing is sent to the internet, and the server only runs while you have started it.</string>
+    <string name="accessibility_service_description">DroidPilot Forge reads the on-screen content of other apps and performs taps, swipes and text input on your behalf. While the DroidPilot Forge server is running, these actions can be requested by an AI assistant on your local network that you have paired with this device using its pairing secret. Nothing is sent to the internet, and the server only runs while you have started it.</string>
 
     <string name="accessibility_on">Accessibility service: on</string>
     <string name="accessibility_off">Accessibility service: off</string>
-    <string name="accessibility_hint">DroidPilot needs this permission to read the screen and perform gestures. The server cannot run without it.</string>
+    <string name="accessibility_hint">DroidPilot Forge needs this permission to read the screen and perform gestures. The server cannot run without it.</string>
     <string name="btn_open_accessibility">Open Accessibility settings</string>
 
     <string name="status_stopped">Server stopped</string>
@@ -58,11 +58,11 @@
 
     <string name="error_accessibility_required">Enable the Accessibility service before starting the server.</string>
     <string name="error_invalid_port">Enter a port between 1024 and 65535.</string>
-    <string name="notification_permission_rationale">Without notification permission, Android hides the DroidPilot status notification — the server still runs, but you will not be able to see or stop it from the notification shade.</string>
+    <string name="notification_permission_rationale">Without notification permission, Android hides the DroidPilot Forge status notification — the server still runs, but you will not be able to see or stop it from the notification shade.</string>
 
     <string name="notification_channel_name">Control server</string>
-    <string name="notification_channel_description">Shows while the DroidPilot control server is accepting connections</string>
-    <string name="notification_title">DroidPilot</string>
+    <string name="notification_channel_description">Shows while the DroidPilot Forge control server is accepting connections</string>
+    <string name="notification_title">DroidPilot Forge</string>
     <string name="notification_starting">Starting the control server…</string>
     <string name="notification_stopped">Control server stopped</string>
     <string name="notification_failed">Control server stopped after an error</string>

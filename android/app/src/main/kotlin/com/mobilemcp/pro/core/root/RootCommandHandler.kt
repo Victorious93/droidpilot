@@ -62,6 +62,21 @@ class RootCommandHandler(
         val permission =
             if (request.elevated) RemotePermission.REMOTE_ROOT else RemotePermission.REMOTE_SHELL
 
+        // 0. Shape. Checked before the replay guard so a malformed request does not burn a
+        //    request id that a corrected retry would then be refused for reusing.
+        if (request.command.isBlank()) {
+            audit.record(
+                type = AuditEventType.AUTHORIZATION_DENIED,
+                deviceId = request.deviceId,
+                deviceName = request.deviceName,
+                permission = permission,
+                initiator = request.initiator,
+                success = false,
+                detail = "Empty command",
+            )
+            return Outcome.Refused("Empty command", ShellStatus.DENIED)
+        }
+
         // 1. Freshness and replay. Before authorisation, so a resent request cannot consume
         //    a single-use grant just by arriving twice.
         when (val verdict = requestGuard.admit(request.requestId, request.timestampMillis)) {
@@ -79,10 +94,6 @@ class RootCommandHandler(
                 return Outcome.Refused(verdict.reason, ShellStatus.DENIED)
             }
             RequestGuard.Verdict.Fresh -> Unit
-        }
-
-        if (request.command.isBlank()) {
-            return Outcome.Refused("Empty command", ShellStatus.DENIED)
         }
 
         // 2. Authorisation. Enforces pairing, grant existence, revocation, expiry,
@@ -110,8 +121,12 @@ class RootCommandHandler(
             val capability = rootManager.capability()
             if (!capability.available) {
                 val reason = capability.unavailableReason ?: "Root is not available on this device"
+                // Recorded as a refusal, not as an execution. The owner reads this trail
+                // to answer "what ran as root on my phone"; a command that was refused for
+                // want of a root provider never ran, and filing it under ROOT_EXECUTED puts
+                // it in that answer indistinguishably from one that did.
                 audit.record(
-                    type = AuditEventType.ROOT_EXECUTED,
+                    type = AuditEventType.AUTHORIZATION_DENIED,
                     deviceId = request.deviceId,
                     deviceName = request.deviceName,
                     permission = permission,
