@@ -47,6 +47,18 @@ class PairingSecretStore(context: Context) {
         return SecureChannel.randomSecret().also(::writeSecret)
     }
 
+    /**
+     * Returns the stored secret, or `null` if there is none. **Never creates one.**
+     *
+     * The distinction from [getOrCreate] matters on the authorisation path. Deciding whether
+     * a device is paired must not have the side effect of minting the very credential that
+     * decision depends on: a first-ever authorisation check would otherwise create a secret,
+     * derive an identity from it, and answer a question it had just invented the answer to.
+     * A read that finds nothing means nothing is paired, which is the honest reply.
+     */
+    @Synchronized
+    fun peek(): ByteArray? = readSecret()
+
     /** Replaces the secret. Every paired client must re-pair afterwards. */
     @Synchronized
     fun regenerate(): ByteArray = SecureChannel.randomSecret().also(::writeSecret)

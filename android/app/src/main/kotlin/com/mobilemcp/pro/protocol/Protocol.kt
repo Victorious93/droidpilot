@@ -35,6 +35,15 @@ data class CommandRequest(
     val id: String,
     val command: String,
     val params: JsonObject = JsonObject(emptyMap()),
+    /**
+     * When the client issued this request, in epoch milliseconds.
+     *
+     * Optional, so that a client written against the previous protocol keeps working for
+     * every ordinary command. Privileged commands refuse to run without it: the replay
+     * guard cannot judge staleness on a request that does not say when it was made, and a
+     * re-executed shell command is a second real action rather than an idempotent retry.
+     */
+    val timestamp: Long? = null,
 )
 
 @Serializable

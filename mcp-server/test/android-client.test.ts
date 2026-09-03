@@ -56,6 +56,26 @@ describe("AndroidClient against a device speaking the real protocol", () => {
     assert.deepEqual(device.received[0].params, { x: 100, y: 200 });
   });
 
+  /**
+   * The device refuses a privileged command that carries no timestamp, because it cannot
+   * judge staleness or replay without one. That makes this field load-bearing rather than
+   * decorative: dropping it would not fail loudly here, it would make every shell command
+   * on a real device start returning "invalid request".
+   */
+  it("stamps every request with the time it was issued", async () => {
+    await connect();
+    const before = Date.now();
+
+    await client!.sendCommand("shell", { command: "id" });
+
+    const sent = device.received[0];
+    assert.ok(sent.timestamp !== undefined, "a request must carry a timestamp");
+    assert.ok(
+      sent.timestamp! >= before && sent.timestamp! <= Date.now(),
+      "the timestamp must be the moment the request was issued",
+    );
+  });
+
   it("surfaces a device-side failure with its error code", async () => {
     await connect();
     device.handler = () => ({ __error: "No element matched" });

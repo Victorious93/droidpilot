@@ -88,6 +88,9 @@ class AuthorizationManager(
      * whether or not the operation then succeeds. Consuming on use rather than on
      * completion is the safe direction: a command that runs and then fails has still run.
      */
+    /** Monotonic within the process; see [nextGrantId]. */
+    private var grantSequence: Long = 0
+
     @Synchronized
     fun authorize(
         deviceId: String,
@@ -163,6 +166,20 @@ class AuthorizationManager(
         return AuthorizationDecision.Denied(reason, permission)
     }
 
+    /**
+     * A collision-free grant id.
+     *
+     * The id used to be derived from the clock, the permission and a device-id prefix, so
+     * two grants of the same permission to the same device inside one millisecond produced
+     * the same id — and because the store is keyed by id, the superseded record was
+     * overwritten rather than kept. Behaviour stayed correct (newest wins, which is
+     * intended) but a line of audit history was lost each time. Harmless while grants were
+     * in memory; permanent once they are written to disk, which is why it is fixed here
+     * rather than later.
+     */
+    private fun nextGrantId(permission: RemotePermission): String =
+        "grant-${clock()}-${grantSequence++}-${permission.wireName}"
+
     private fun consumeIfSingleUse(grant: Grant) {
         val now = clock()
         val updated = if (grant.duration == GrantDuration.Once) {
@@ -182,7 +199,7 @@ class AuthorizationManager(
         permission: RemotePermission,
         duration: GrantDuration,
         note: String? = null,
-        id: String = "grant-${clock()}-${permission.wireName}-${deviceId.take(8)}",
+        id: String = nextGrantId(permission),
     ): Grant {
         // Supersede any live grant for the same pair, so the newest owner decision is the
         // one in force and an older, longer-lived grant cannot outlive a deliberate change.
