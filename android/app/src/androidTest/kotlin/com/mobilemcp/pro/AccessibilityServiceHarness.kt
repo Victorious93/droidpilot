@@ -46,11 +46,28 @@ object AccessibilityServiceHarness {
             Thread.sleep(POLL_INTERVAL_MILLIS)
         }
 
+        // A setup failure here is the single most likely reason for a red instrumented
+        // run, and it happens on a machine nobody is watching — so the message carries
+        // everything needed to diagnose it from the CI log alone, rather than requiring a
+        // second run with extra logging added.
         error(
-            "The Accessibility service did not connect within ${ENABLE_TIMEOUT_MILLIS}ms. " +
-                "Expected component: $component. Currently enabled: " +
-                shell("settings get secure enabled_accessibility_services").trim()
+            buildString {
+                appendLine("The Accessibility service did not connect within ${ENABLE_TIMEOUT_MILLIS}ms.")
+                appendLine("  expected component : $component")
+                appendLine("  enabled services   : ${settingOrError("enabled_accessibility_services")}")
+                appendLine("  accessibility_enabled: ${settingOrError("accessibility_enabled")}")
+                appendLine("  test process       : ${InstrumentationRegistry.getInstrumentation().context.packageName}")
+                appendLine("  target process     : ${context.packageName}")
+                append("  installed services : ${settingOrError("enabled_accessibility_services", secure = false)}")
+            },
         )
+    }
+
+    /** Reads a setting, returning the failure text rather than throwing from an error path. */
+    private fun settingOrError(key: String, secure: Boolean = true): String = try {
+        shell("settings get ${if (secure) "secure" else "global"} $key").trim().ifBlank { "(unset)" }
+    } catch (e: Exception) {
+        "(could not read: ${e.javaClass.simpleName})"
     }
 
     /** Disables the service again, so tests do not leak state into one another. */
