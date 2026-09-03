@@ -26,7 +26,20 @@ object AccessibilityServiceHarness {
     // service under software-assisted virtualisation. The cost of being wrong in this
     // direction is a slower failure; the cost in the other is a red run that says nothing.
     private const val ENABLE_TIMEOUT_MILLIS = 90_000L
+
+    // Once the first attempt has exhausted the full budget, the service is not coming. A
+    // later test still re-checks — the platform could in principle bind it late — but for
+    // seconds rather than minutes. Without this, every test in the suite waits the whole
+    // budget on the way to the same failure, and twenty-seven of them exceed the job's
+    // wall-clock limit, so a diagnosable failure turns into a timed-out runner with no
+    // report at all.
+    private const val RETRY_TIMEOUT_MILLIS = 5_000L
+
     private const val POLL_INTERVAL_MILLIS = 250L
+
+    /** The diagnosis from the first failed attempt, reused so later tests fail fast. */
+    @Volatile
+    private var firstFailure: String? = null
 
     /**
      * Enables the service and blocks until it has bound itself into [AutomatorRegistry].
@@ -40,10 +53,14 @@ object AccessibilityServiceHarness {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val component = "${context.packageName}/${DroidPilotAccessibilityService::class.java.name}"
 
-        shell("settings put secure enabled_accessibility_services $component")
-        shell("settings put secure accessibility_enabled 1")
+        val alreadyFailed = firstFailure != null
+        if (!alreadyFailed) {
+            shell("settings put secure enabled_accessibility_services $component")
+            shell("settings put secure accessibility_enabled 1")
+        }
 
-        val deadline = System.currentTimeMillis() + ENABLE_TIMEOUT_MILLIS
+        val budget = if (alreadyFailed) RETRY_TIMEOUT_MILLIS else ENABLE_TIMEOUT_MILLIS
+        val deadline = System.currentTimeMillis() + budget
         var systemEverReportedEnabled = false
         while (System.currentTimeMillis() < deadline) {
             AutomatorRegistry.get()?.let { return it }
@@ -51,34 +68,41 @@ object AccessibilityServiceHarness {
             Thread.sleep(POLL_INTERVAL_MILLIS)
         }
 
+        firstFailure?.let { error(it) }
+
         // A setup failure here is the single most likely reason for a red instrumented
         // run, and it happens on a machine nobody is watching — so the message carries
         // everything needed to diagnose it from the CI log alone, rather than requiring a
         // second run with extra logging added.
-        error(
-            buildString {
-                appendLine("The Accessibility service did not connect within ${ENABLE_TIMEOUT_MILLIS}ms.")
-                // The decisive distinction. If the system enabled the service but the
-                // registry stayed empty, the fault is in the app (onServiceConnected did
-                // not register). If the system never enabled it, the settings write did not
-                // take. These need entirely different fixes, so the message says which.
-                appendLine(
-                    if (systemEverReportedEnabled) {
-                        "  DIAGNOSIS: the system DID enable the service, but it never registered " +
-                            "itself. Look at DroidPilotAccessibilityService.onServiceConnected."
-                    } else {
-                        "  DIAGNOSIS: the system never reported the service as enabled, so the " +
-                            "settings write did not take effect."
-                    },
-                )
-                appendLine("  expected component : $component")
-                appendLine("  enabled services   : ${settingOrError("enabled_accessibility_services")}")
-                appendLine("  accessibility_enabled: ${settingOrError("accessibility_enabled")}")
-                appendLine("  test process       : ${InstrumentationRegistry.getInstrumentation().context.packageName}")
-                appendLine("  target process     : ${context.packageName}")
-                append("  installed services : ${settingOrError("enabled_accessibility_services", secure = false)}")
-            },
-        )
+        val diagnosis = buildString {
+            appendLine("The Accessibility service did not connect within ${budget}ms.")
+            // The decisive distinction. If the system enabled the service but the
+            // registry stayed empty, the fault is in the app (onServiceConnected did
+            // not register). If the system never enabled it, the settings write did not
+            // take. These need entirely different fixes, so the message says which.
+            appendLine(
+                if (systemEverReportedEnabled) {
+                    "  DIAGNOSIS: the system DID enable the service, but it never registered " +
+                        "itself. Look at DroidPilotAccessibilityService.onServiceConnected."
+                } else {
+                    "  DIAGNOSIS: the system never reported the service as enabled, so the " +
+                        "settings write did not take effect."
+                },
+            )
+            appendLine("  expected component : $component")
+            appendLine("  enabled services   : ${settingOrError("enabled_accessibility_services")}")
+            appendLine("  accessibility_enabled: ${settingOrError("accessibility_enabled")}")
+            appendLine("  test package       : ${InstrumentationRegistry.getInstrumentation().context.packageName}")
+            appendLine("  target package     : ${context.packageName}")
+            // The service registers itself into a process-global object, so the tests can
+            // only see it if the service is instantiated in this very process. Package
+            // names do not establish that; the process name does.
+            appendLine("  this process       : ${processName()} (pid ${android.os.Process.myPid()})")
+            appendLine("  --- logcat (accessibility + DroidPilot) ---")
+            append(recentLog())
+        }
+        firstFailure = diagnosis
+        error(diagnosis)
     }
 
     /** Asks the platform — not our own registry — whether it considers the service enabled. */
@@ -91,6 +115,45 @@ object AccessibilityServiceHarness {
         } == true
     } catch (e: Exception) {
         false
+    }
+
+    /**
+     * The last few hundred lines of logcat, filtered to the things that explain a failure
+     * to bind: the platform's own accessibility manager, the activity manager's service
+     * errors, and DroidPilot's own tag.
+     *
+     * Without this, a service that throws on the way up is invisible from the CI log —
+     * the only symptom is a timeout that looks identical to "the settings write did not
+     * take", and diagnosing it costs another ten-minute emulator run.
+     */
+    private fun recentLog(): String = try {
+        shell("logcat -d -t 400")
+            .lineSequence()
+            .filter { line ->
+                RELEVANT_LOG_TAGS.any { it in line }
+            }
+            .toList()
+            .takeLast(60)
+            .joinToString("\n") { "    $it" }
+            .ifBlank { "    (nothing matching in the last 400 lines)" }
+    } catch (e: Exception) {
+        "    (could not read logcat: ${e.javaClass.simpleName})"
+    }
+
+    private val RELEVANT_LOG_TAGS = listOf(
+        "AccessibilityManagerService",
+        "AccessibilityService",
+        "DroidPilot",
+        "ActivityManager",
+        "AndroidRuntime",
+        "PackageManager",
+    )
+
+    /** The name of the process these tests are running in, read from the kernel. */
+    private fun processName(): String = try {
+        java.io.File("/proc/self/cmdline").readBytes().decodeToString().trimEnd('\u0000')
+    } catch (e: Exception) {
+        "(unreadable: ${e.javaClass.simpleName})"
     }
 
     /** Reads a setting, returning the failure text rather than throwing from an error path. */
