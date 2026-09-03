@@ -19,7 +19,12 @@ class FakeDeviceAutomator : DeviceAutomator {
 
     data class Call(val name: String, val args: Map<String, Any?>)
 
-    val calls = mutableListOf<Call>()
+    // Concurrent, because ControlServer runs up to MAX_CONCURRENT_COMMANDS commands at
+    // once and each of them records a call here. A plain ArrayList would be mutated from
+    // several coroutines with no synchronisation, which can drop entries or throw from
+    // inside the code under test — a defect in the double masquerading as one in the
+    // server.
+    val calls: MutableList<Call> = java.util.concurrent.CopyOnWriteArrayList()
 
     /** When set, every operation delays this long — used to drive deadline tests. */
     var artificialDelayMillis: Long = 0

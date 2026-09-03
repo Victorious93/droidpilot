@@ -387,8 +387,50 @@ class ControlServerTest {
                 Thread.sleep(20)
             }
 
+            assertNull("the client rejected a frame: ${client.failed}", client.failed)
             assertNotNull("ping must be answered while long waits are in flight", pong)
             assertTrue(pong!!.success)
+        } finally {
+            client.closeBlocking()
+        }
+    }
+
+    /**
+     * Every response must reach the client, including when several are produced at once.
+     *
+     * The channel numbers records with a counter and the peer requires that counter to be
+     * strictly increasing — which is what makes a replayed command impossible. Sealing was
+     * synchronised but the socket write was not, so two responses could be numbered n and
+     * n+1 and then written in the opposite order; the peer discarded the one that arrived
+     * late, and a client silently never received one of its answers. That is what turned
+     * the concurrency test above intermittently red on CI.
+     *
+     * The delay is what makes this deterministic rather than lucky: every command is held
+     * for the same interval and released together, so the responses genuinely contend.
+     */
+    @Test
+    fun `responses produced simultaneously all reach the client`() {
+        val client = connectedClient()
+        try {
+            automator.artificialDelayMillis = 300
+
+            // Matches the server's concurrency ceiling, so all of them are genuinely in
+            // flight together. The exact number is not the point — that they overlap is.
+            val count = 8
+            repeat(count) { i -> client.sendCommand("c-$i", "get_device_info") }
+
+            val seen = mutableSetOf<String>()
+            val deadline = System.currentTimeMillis() + 30_000
+            while (System.currentTimeMillis() < deadline && seen.size < count) {
+                client.responses.poll()?.let { seen += it.id }
+                Thread.sleep(10)
+            }
+
+            assertNull(
+                "the client rejected a response frame, so records arrived out of counter order",
+                client.failed,
+            )
+            assertEquals("every response must arrive", count, seen.size)
         } finally {
             client.closeBlocking()
         }

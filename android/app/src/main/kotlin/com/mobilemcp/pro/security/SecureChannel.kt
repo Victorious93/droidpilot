@@ -61,7 +61,15 @@ class SecureChannel private constructor(
     private var sendCounter: Long = 0
     private var highestSeenReceiveCounter: Long = -1
 
-    /** Encrypts [plaintext] into a self-contained record. Not safe for concurrent use. */
+    /**
+     * Encrypts [plaintext] into a self-contained record.
+     *
+     * Synchronised, so two callers can never be handed the same counter and therefore
+     * never reuse a nonce under the same key. Note that this makes *numbering* atomic and
+     * nothing more: a caller that transmits records concurrently must also serialise the
+     * seal with the write, or records can reach the peer out of counter order and be
+     * rejected as replays. `ControlServer.sendEncrypted` does exactly that.
+     */
     @Synchronized
     fun seal(plaintext: ByteArray): ByteArray {
         val counter = sendCounter

@@ -85,7 +85,23 @@ class ControlServer(
         fun onServerError(message: String)
     }
 
-    private class Session(val channel: SecureChannel, val peer: String)
+    private class Session(val channel: SecureChannel, val peer: String) {
+        /**
+         * Serialises sealing a record with writing it to the socket.
+         *
+         * [SecureChannel.seal] is already synchronised, so two concurrent seals cannot
+         * reuse a nonce — but taking the counter and enqueuing the frame were separate
+         * steps, and up to [MAX_CONCURRENT_COMMANDS] command coroutines finish at once.
+         * Two responses could therefore be sealed as counters n and n+1 and reach the
+         * socket in the opposite order. The peer requires *strictly increasing* counters
+         * — that is what makes a replayed command impossible — so it drops the record
+         * that arrives late, and a client silently never receives one of its answers.
+         *
+         * Holding this across both steps makes the order records are numbered in the same
+         * as the order they are written in.
+         */
+        val sendLock = Any()
+    }
 
     private val sessions = ConcurrentHashMap<WebSocket, Session>()
     private val authGate = AuthGate()
@@ -239,7 +255,9 @@ class ControlServer(
     private fun sendEncrypted(conn: WebSocket, payload: String) {
         val session = sessions[conn] ?: return
         try {
-            conn.send(session.channel.seal(payload.encodeToByteArray()))
+            synchronized(session.sendLock) {
+                conn.send(session.channel.seal(payload.encodeToByteArray()))
+            }
         } catch (e: Exception) {
             // A send can fail benignly when the peer vanishes mid-response; not worth
             // tearing anything down beyond this connection.
