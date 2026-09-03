@@ -157,10 +157,20 @@ prevent. Refusing is visible and self-healing as ids age out.
 ### F-01 — The authorisation core is unreachable from the application
 
 **Severity:** architectural, not a code defect. Nothing outside `core/permission`,
-`core/root` and `core/audit` references any of it; the only `PairedDeviceRegistry` and
-`ShellExecutor` collaborators live in test sources. The components are correct and tested;
-the app does not call them. Documented in `PHASE_3_AUDIT.md` and in the README's status
-table. **Status: OPEN** — closing it is implementation work, not a fix.
+`core/root` and `core/audit` referenced any of it; the only `PairedDeviceRegistry` and
+`ShellExecutor` collaborators lived in test sources. The components were correct and tested;
+the app did not call them.
+
+**Status: FIXED.** The command path now runs through the core. `DeviceIdentity` derives a
+device id from the pairing secret, `PrivilegedCommandGateway` translates a wire request into
+a `ShellCommandRequest`, and `CommandDispatcher` routes the new `shell` and `shell_root`
+commands through `RootCommandHandler`. Grants are persisted, and the app carries an owner UI
+to issue and revoke them.
+
+Verified by mutation rather than by assertion alone: removing the authorisation check from
+`RootCommandHandler` turns 18 tests red, 9 of them in the new
+`CommandDispatcherPrivilegedTest`, which exercises the path from a `CommandRequest` and
+asserts on whether a command *ran*.
 
 ### F-02 — There is no AI-specific gate for non-root AI commands
 
@@ -172,12 +182,14 @@ Phase 3 excludes. **Status: OPEN, design question.**
 
 ### F-03 — Grant ids can collide within a millisecond
 
-`grant()` derives the id from `clock()`, the permission and a device-id prefix. Two grants
-of the same permission to the same device inside one millisecond produce the same id, and
-the store is keyed by id, so the superseded (revoked) record is overwritten rather than
-retained. Behaviour is still "newest wins", which is intended; what is lost is a line of
-audit history. Harmless for the in-memory store, but it must be fixed before grants are
-persisted. **Status: OPEN, P3.**
+`grant()` derived the id from `clock()`, the permission and a device-id prefix. Two grants of
+the same permission to the same device inside one millisecond produced the same id, and the
+store is keyed by id, so the superseded (revoked) record was overwritten rather than
+retained. Behaviour stayed correct ("newest wins", which is intended); what was lost was a
+line of audit history.
+
+**Status: FIXED**, and fixed before persistence rather than after — on disk the collisions
+would have been permanent. Ids now carry a per-process sequence number alongside the clock.
 
 ### F-04 — `onAudit` is invoked while the authorisation lock is held
 

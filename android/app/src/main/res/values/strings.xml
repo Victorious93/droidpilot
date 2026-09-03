@@ -70,4 +70,27 @@
         <item quantity="one">Listening on port %1$d · %2$d client</item>
         <item quantity="other">Listening on port %1$d · %2$d clients</item>
     </plurals>
+    <string name="shell_access_title">Remote command access</string>
+    <string name="shell_access_explainer">Pairing a client lets it read the screen and tap. Running shell commands is a separate decision, and is denied until you grant it here. Grants apply to the currently paired client and end when you revoke them, when they expire, or when you regenerate the pairing secret.</string>
+    <string name="grants_none">No command access granted. Shell and root commands are refused.</string>
+    <string name="grants_prefix">Granted:</string>
+    <string name="btn_grant_shell">Grant shell</string>
+    <string name="btn_grant_root">Grant root</string>
+    <string name="btn_grant_ai_root">Also allow the AI to initiate root</string>
+    <string name="btn_view_audit">Audit log</string>
+    <string name="btn_revoke_all">Revoke all</string>
+    <string name="grant_duration_title">How long should this last?</string>
+    <string name="grant_once">Once — a single command</string>
+    <string name="grant_15_minutes">15 minutes</string>
+    <string name="grant_1_hour">1 hour</string>
+    <string name="grant_until_revoked">Until I revoke it</string>
+    <string name="grant_root_warning">A root command can do anything on this device, including deleting data and changing system settings. Only grant this to a client you control.</string>
+    <string name="grant_ai_root_warning">This lets the AI decide, on its own, to run commands as root. It applies on top of root access, not instead of it — you must grant both.</string>
+    <string name="granted_toast">Access granted</string>
+    <string name="revoked_toast">All command access revoked</string>
+    <string name="audit_empty">Nothing recorded yet.</string>
+    <string name="audit_title">Privileged operations</string>
+    <string name="no_pairing_secret">Start the server once to create a pairing secret before granting access.</string>
+    <string name="btn_close">Close</string>
+    <string name="btn_cancel">Cancel</string>
 </resources>

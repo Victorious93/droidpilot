@@ -6,6 +6,7 @@ import com.mobilemcp.pro.protocol.CommandRequest
 import com.mobilemcp.pro.protocol.CommandResponse
 import com.mobilemcp.pro.protocol.Protocol
 import com.mobilemcp.pro.protocol.ServerHello
+import com.mobilemcp.pro.core.identity.DeviceIdentity
 import com.mobilemcp.pro.security.AuthGate
 import com.mobilemcp.pro.security.PairingSecret
 import com.mobilemcp.pro.security.SecureChannel
@@ -102,6 +103,16 @@ class ControlServer(
          */
         val sendLock = Any()
     }
+
+    /**
+     * The identity of any peer on this server, derived from the credential it must present.
+     *
+     * There is one pairing secret, so there is one identity a peer can have: a connection
+     * exists only because the peer proved it holds that secret during the upgrade. Computing
+     * this from the secret rather than accepting it from the wire is what stops a peer
+     * naming itself — it never supplies the value at all.
+     */
+    private val callerDeviceId: String by lazy { DeviceIdentity.forSecret(pairingSecret) }
 
     private val sessions = ConcurrentHashMap<WebSocket, Session>()
     private val authGate = AuthGate()
@@ -243,7 +254,7 @@ class ControlServer(
         scope.launch {
             inFlight.withPermit {
                 listener.onServerLog("→ ${request.command}")
-                val response = dispatcher.dispatch(request)
+                val response = dispatcher.dispatch(request, callerDeviceId)
                 listener.onServerLog("← ${request.command}: ${if (response.success) "ok" else response.errorCode?.name}")
                 if (conn.isOpen) {
                     sendEncrypted(conn, Protocol.json.encodeToString(CommandResponse.serializer(), response))

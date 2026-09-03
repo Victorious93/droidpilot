@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.mobilemcp.pro.BuildConfig
 import com.mobilemcp.pro.R
 import com.mobilemcp.pro.automation.AutomatorRegistry
+import com.mobilemcp.pro.core.SecurityServices
 import com.mobilemcp.pro.security.PairingSecretStore
 import com.mobilemcp.pro.server.CommandDispatcher
 import com.mobilemcp.pro.server.ControlServer
@@ -121,6 +122,10 @@ class ServerForegroundService : LifecycleService() {
                         dispatcher = CommandDispatcher(
                             automatorProvider = AutomatorRegistry::get,
                             appVersion = BuildConfig.VERSION_NAME,
+                            // The authorised route to a shell. Passing it here is what makes
+                            // the authorisation core reachable at all; without it the shell
+                            // commands answer "unsupported" and nothing can elevate.
+                            privileged = SecurityServices.privilegedCommands,
                         ),
                         automatorProvider = AutomatorRegistry::get,
                         appVersion = BuildConfig.VERSION_NAME,

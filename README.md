@@ -91,22 +91,29 @@ implemented because it was planned.
 | MCP server and tool surface | Unit tested against a protocol-accurate fake device |
 | Honest capability reporting from the live service | Instrumented |
 
-### Implemented as a library, not yet reachable from the app
+### Implemented and reachable from the app
 
-These are complete, unit-tested Kotlin components under `core/`. **No production code path
-calls them yet** — there is no remote-device transport or UI wired to them, so the
-behaviour they describe is not available to a user of the app today.
+The authorisation core now sits on the command path. A `shell` or `shell_root` command from
+a paired client is refused unless the owner has granted the matching permission in the app,
+and the refusal happens before anything runs.
 
-| Component | Status |
+| Component | Evidence |
 |---|---|
-| `RemotePermission` — ten permissions plus `AI_ROOT` | Library only |
-| `AuthorizationManager` — single decision point, per-command evaluation | Library only |
-| `Grant` / `GrantDuration` — once, timed, until-revoked, with revocation | Library only |
-| `RequestGuard` — request-level replay and clock-skew rejection | Library only |
-| `RootManager` — provider-agnostic elevated-shell detection | Library only |
-| `ProcessShellExecutor` — bounded, timeout-enforcing process execution | Library only |
-| `RootCommandHandler` — the ordered authorisation sequence | Library only |
-| `AuditLogger` — privileged-operation trail, sizes not contents | Library only |
+| `RemotePermission` — ten permissions plus `AI_ROOT` | Unit tested |
+| `AuthorizationManager` — single decision point, recomputed per command | 27 tests |
+| `Grant` / `GrantDuration` — once, timed, until-revoked, with revocation | Unit tested |
+| `PersistentGrantStore` — grants and revocations survive a restart | 15 tests |
+| `DeviceIdentity` — identity derived from the pairing secret | 10 tests |
+| `RequestGuard` — request-level replay and clock-skew rejection, bounded | 13 tests |
+| `RootManager` — provider-agnostic elevated-shell detection | Unit tested |
+| `RootCommandHandler` — the ordered authorisation sequence | 24 tests |
+| `PrivilegedCommandGateway` + dispatcher wiring | 22 tests, end to end from a wire request |
+| `AuditLogger` — privileged-operation trail, sizes not contents | 9 tests |
+| Owner UI for granting, revoking and reviewing the audit trail | Not covered by an automated test — see [Limitations](#limitations) |
+
+Those 22 wiring tests assert on whether a command *ran*, not on what a decision object said.
+Removing the authorisation check from the handler turns 18 tests red across the suite, which
+is the property that makes them worth having.
 
 ### Not implemented
 
@@ -116,7 +123,7 @@ Designed or discussed, but absent from the codebase. Do not rely on any of it.
 |---|---|
 | Developer Mode (autonomous build/test/fix loop) | Planned |
 | Dual-mode manager / mode switching | Planned |
-| Device identity and device-to-device pairing | Planned |
+| Device-to-device pairing (a second phone as a peer) | Planned — a single identity, derived from the pairing secret, exists today |
 | Remote device control (device A → device B) | Planned |
 | Remote command bus / offline queue | Planned |
 | Interactive root sessions | Planned |
@@ -223,6 +230,8 @@ Connect to my Android device: droidpilot://192.168.1.42:8765#<secret>
 | `press_key` | back, home, recents, notifications, quick_settings, power_dialog, split_screen, lock_screen, take_screenshot |
 | `open_app` | Launch an app by package name |
 | `get_focused` | Describe the currently focused input element |
+| `shell` | Run an unprivileged shell command — **requires a `REMOTE_SHELL` grant** |
+| `shell_root` | Run a command as root — **requires both `REMOTE_ROOT` and `AI_ROOT`** |
 
 ### A note on screenshots
 
@@ -260,11 +269,9 @@ The server is then unreachable from the network entirely; connect to `127.0.0.1`
 
 ## Authorization core
 
-> **Status: library only.** The components below are implemented and unit-tested, but no
-> production code path invokes them yet. They are documented here because they define the
-> model the remaining work is being built against — not because the app enforces them today.
-
-The intended sequence for any privileged operation:
+Every privileged command goes through this sequence. Nothing else in the app can reach an
+elevated shell: `RootManager` is the only class that elevates, and the only caller that
+reaches it from the network is the handler behind the command gateway.
 
 ```
 Device identity
@@ -283,6 +290,11 @@ Execution
       ↓
 Audit logging      ← sizes, never contents
 ```
+
+**Identity is derived, not asserted.** A peer never sends a device id. There is one pairing
+secret, so there is one identity a peer can hold, and it is a hash of that secret. One
+consequence is worth knowing: **regenerating the pairing secret voids every grant**, because
+the identity they are keyed to stops existing. That is the fastest way to revoke everything.
 
 The permissions that exist in code:
 
@@ -427,9 +439,10 @@ droidpilot/
 │       ├── main/kotlin/com/mobilemcp/pro/
 │       │   ├── automation/      # DeviceAutomator contract, UI node model, selectors
 │       │   ├── core/            # OperationResult, capabilities, network addresses
-│       │   │   ├── audit/       # AuditLogger            (library only)
-│       │   │   ├── permission/  # Authorization core     (library only)
-│       │   │   └── root/        # Root detection + shell (library only)
+│       │   │   ├── audit/       # AuditLogger
+│       │   │   ├── identity/    # Device identity, derived from the pairing secret
+│       │   │   ├── permission/  # Authorization core + persistent grant store
+│       │   │   └── root/        # Root detection + shell execution
 │       │   ├── protocol/        # Wire protocol and serializers
 │       │   ├── security/        # Pairing secret, secure channel, auth gate
 │       │   ├── server/          # Control server, command dispatcher
@@ -483,8 +496,14 @@ yet:
 - **The pairing secret is the entire authority.** Anyone holding it is indistinguishable
   from the legitimate client. There is no forward secrecy: traffic recorded now can be
   decrypted by someone who learns the secret later. Regenerating the secret bounds that.
-- **The authorization core is not wired into the app.** It is tested, but it does not yet
-  guard anything at runtime.
+- **The owner-facing grant UI has no automated test.** The authorisation logic behind it is
+  covered thoroughly, but the screen that issues and revokes grants has only been exercised
+  by building it, not by running it on a device in this environment.
+- **`AI_ROOT` is a policy control, not a boundary against a hostile client.** It rests on the
+  `initiator` field, which the peer supplies. DroidPilot's own MCP server declares every
+  command as AI-initiated, which is the truth and makes the gate meaningful — but a client
+  that holds the pairing secret and chooses to lie can already do anything the secret
+  permits.
 - **Screen capture is rate-limited by Android** to roughly one per second.
 
 ---
@@ -497,12 +516,13 @@ yet:
 - Authenticated, encrypted, replay-resistant transport
 - Keystore-backed pairing secret
 - MCP server and tool surface
-- Authorization, root-detection and audit components as tested libraries
+- Authorization, root-detection and audit components, wired into the command path
+- Authorised `shell` and `shell_root` commands, denied by default
+- Persistent grants, and an owner UI to grant, revoke and review
 
 **In development**
 
-- Wiring the authorization core into a real remote-command path
-- Persistence for grants and the audit trail (both are currently in-memory)
+- Persistence for the audit trail (grants now persist; the trail is still in-memory)
 
 **Planned**
 

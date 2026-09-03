@@ -214,7 +214,13 @@ export class AndroidClient {
     }
 
     const id = `req_${++this.requestCounter}_${Date.now()}`;
-    const payload = Buffer.from(JSON.stringify({ id, command, params }), "utf8");
+    // The timestamp lets the device reject a stale or replayed privileged request. It is
+    // optional for ordinary commands and mandatory for shell ones, so it is always sent
+    // rather than conditionally: one code path, and no way to forget it where it counts.
+    const payload = Buffer.from(
+      JSON.stringify({ id, command, params, timestamp: Date.now() }),
+      "utf8",
+    );
 
     return new Promise<CommandResponse>((resolve, reject) => {
       const timer = setTimeout(() => {

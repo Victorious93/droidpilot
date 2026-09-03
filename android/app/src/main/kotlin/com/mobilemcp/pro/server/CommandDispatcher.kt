@@ -6,6 +6,7 @@ import com.mobilemcp.pro.automation.ElementSelector
 import com.mobilemcp.pro.automation.ScrollDirection
 import com.mobilemcp.pro.automation.SystemKey
 import com.mobilemcp.pro.core.ErrorCode
+import com.mobilemcp.pro.core.root.ShellLimits
 import com.mobilemcp.pro.core.OperationResult
 import com.mobilemcp.pro.protocol.CommandRequest
 import com.mobilemcp.pro.protocol.CommandResponse
@@ -39,12 +40,28 @@ import kotlinx.serialization.json.put
 class CommandDispatcher(
     private val automatorProvider: () -> DeviceAutomator?,
     private val appVersion: String,
+    /**
+     * The authorised route to a shell, or `null` when this dispatcher has none.
+     *
+     * Null is the safe shape rather than a missing feature flag: with no gateway the shell
+     * commands are refused as unsupported, and there is no code path from a network request
+     * to an elevated shell at all.
+     */
+    private val privileged: PrivilegedCommandGateway? = null,
 ) {
 
-    suspend fun dispatch(request: CommandRequest): CommandResponse {
+    /**
+     * Answers [request] on behalf of [callerDeviceId].
+     *
+     * The caller's identity is a property of the connection, not of the request — a peer
+     * does not get to say who it is — so it is passed in by the server that authenticated
+     * it rather than read out of the payload. It defaults to `null` because the ordinary
+     * automation commands do not consult it; the privileged ones refuse without it.
+     */
+    suspend fun dispatch(request: CommandRequest, callerDeviceId: String? = null): CommandResponse {
         return try {
             withTimeout(deadlineFor(request)) {
-                execute(request)
+                execute(request, callerDeviceId)
             }
         } catch (e: TimeoutCancellationException) {
             CommandResponse.error(
@@ -64,8 +81,27 @@ class CommandDispatcher(
         }
     }
 
-    private suspend fun execute(request: CommandRequest): CommandResponse {
+    private suspend fun execute(request: CommandRequest, callerDeviceId: String?): CommandResponse {
         val params = CommandParams(request.params)
+
+        // Shell commands are answered before the Accessibility requirement below, because
+        // they do not need it: a shell is a separate capability, and refusing one for want
+        // of an accessibility service would be a misleading reason. They are also the only
+        // commands here that consult authorisation at all.
+        when (request.command) {
+            "shell", "shell_root" -> {
+                val gateway = privileged ?: return CommandResponse.error(
+                    request.id,
+                    ErrorCode.UNSUPPORTED,
+                    "This build has no shell command path.",
+                )
+                return gateway.handle(
+                    request,
+                    callerDeviceId,
+                    elevated = request.command == "shell_root",
+                )
+            }
+        }
 
         // Commands that need no device access are answered first, so that `ping` and
         // `get_capabilities` still work when the Accessibility service is off — which is
@@ -270,6 +306,20 @@ class CommandDispatcher(
         }
         "screenshot" -> SCREENSHOT_DEADLINE_MILLIS
         "get_ui_tree" -> TREE_DEADLINE_MILLIS
+        // The shell enforces its own timeout on the process it spawns. This outer deadline
+        // must therefore sit *above* it, or the dispatcher would cancel the coroutine while
+        // the process was still being torn down and report a timeout for a command that had
+        // in fact already been authorised and run — the worst of both, since the audit
+        // record would show an execution the caller was told never happened.
+        "shell", "shell_root" -> {
+            val requested = CommandParams(request.params).optionalLong(
+                "timeout",
+                ShellLimits.DEFAULT_TIMEOUT_MILLIS,
+                1_000L,
+                ShellLimits.MAX_TIMEOUT_MILLIS,
+            )
+            requested + SHELL_DEADLINE_MARGIN_MILLIS
+        }
         else -> DEFAULT_DEADLINE_MILLIS
     }
 
@@ -326,6 +376,9 @@ class CommandDispatcher(
         const val SCREENSHOT_DEADLINE_MILLIS = 20_000L
         const val TREE_DEADLINE_MILLIS = 30_000L
         const val WAIT_DEADLINE_MARGIN_MILLIS = 5_000L
+
+        /** Head-room over the shell's own timeout, for process teardown and capture. */
+        const val SHELL_DEADLINE_MARGIN_MILLIS = 15_000L
 
         const val MAX_GESTURE_MILLIS = 60_000L
         const val MAX_WAIT_MILLIS = 300_000L

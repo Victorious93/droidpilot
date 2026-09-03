@@ -22,6 +22,10 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.mobilemcp.pro.R
 import com.mobilemcp.pro.core.NetworkAddresses
+import com.mobilemcp.pro.core.SecurityServices
+import com.mobilemcp.pro.core.audit.AuditEventType
+import com.mobilemcp.pro.core.permission.GrantDuration
+import com.mobilemcp.pro.core.permission.RemotePermission
 import com.mobilemcp.pro.databinding.ActivityMainBinding
 import com.mobilemcp.pro.security.PairingSecret
 import com.mobilemcp.pro.security.PairingSecretStore
@@ -84,6 +88,7 @@ class MainActivity : AppCompatActivity() {
         // the user may have just come back from the settings screen we sent them to.
         renderAccessibilityState()
         renderAddresses()
+        renderGrants()
     }
 
     // ------------------------------------------------------------------- actions
@@ -107,6 +112,18 @@ class MainActivity : AppCompatActivity() {
         binding.btnRegenerateSecret.setOnClickListener { confirmRegenerate() }
 
         binding.btnClearLog.setOnClickListener { ServerController.clearLogs() }
+
+        binding.btnGrantShell.setOnClickListener {
+            confirmGrant(RemotePermission.REMOTE_SHELL, warning = null)
+        }
+        binding.btnGrantRoot.setOnClickListener {
+            confirmGrant(RemotePermission.REMOTE_ROOT, warning = R.string.grant_root_warning)
+        }
+        binding.btnGrantAiRoot.setOnClickListener {
+            confirmGrant(RemotePermission.AI_ROOT, warning = R.string.grant_ai_root_warning)
+        }
+        binding.btnRevokeAll.setOnClickListener { revokeAll() }
+        binding.btnViewAudit.setOnClickListener { showAuditLog() }
 
         // Lets the log pane be dragged. `android:scrollbars` alone renders the bar but does
         // not make the view scrollable.
@@ -165,7 +182,12 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.cancel, null)
             .setPositiveButton(R.string.regenerate_confirm) { _, _ ->
                 secretStore.regenerate()
+                // Grants are keyed to a device id derived from the secret, so they are
+                // already inert at this point — the identity they name can no longer
+                // connect. This clears the dead records and refreshes what is displayed.
+                SecurityServices.onPairingSecretRegenerated()
                 renderPairingSecret()
+                renderGrants()
                 Snackbar.make(binding.root, R.string.regenerated, Snackbar.LENGTH_LONG).show()
                 // Existing sessions authenticated with the old secret must not survive it.
                 if (ServerController.state.value is ServerState.Running) {
@@ -174,6 +196,144 @@ class MainActivity : AppCompatActivity() {
             }
             .show()
     }
+
+    // -------------------------------------------------------- remote command access
+
+    /**
+     * Describes what the paired client may currently do.
+     *
+     * Phrased as a list of what *is* allowed rather than a set of toggles, because the
+     * honest default is nothing: a reader glancing at this card should be able to tell at
+     * once whether anything is authorised, without interpreting several switch positions.
+     */
+    private fun renderGrants() {
+        val deviceId = SecurityServices.pairedDevices.currentDeviceId()
+        if (deviceId == null) {
+            binding.tvGrants.setText(R.string.no_pairing_secret)
+            return
+        }
+
+        val active = SecurityServices.authorization.activeGrants(deviceId)
+        binding.tvGrants.text = if (active.isEmpty()) {
+            getString(R.string.grants_none)
+        } else {
+            buildString {
+                append(getString(R.string.grants_prefix))
+                active.sortedBy { it.permission.ordinal }.forEach { grant ->
+                    append("\n• ")
+                    append(grant.permission.wireName)
+                    append(" — ")
+                    append(describe(grant.duration))
+                }
+            }
+        }
+    }
+
+    private fun describe(duration: GrantDuration): String = when (duration) {
+        GrantDuration.Once -> getString(R.string.grant_once)
+        GrantDuration.UntilRevoked -> getString(R.string.grant_until_revoked)
+        is GrantDuration.Until -> {
+            val remaining = duration.expiresAtMillis - System.currentTimeMillis()
+            val minutes = (remaining / 60_000L).coerceAtLeast(0)
+            "expires in ${minutes}m"
+        }
+    }
+
+    /**
+     * Asks for the duration, then issues the grant.
+     *
+     * The duration is a required choice rather than a default, because "until I revoke it"
+     * is the most permissive option and should never be what happens to someone who tapped
+     * through a dialog without reading it.
+     */
+    private fun confirmGrant(permission: RemotePermission, warning: Int?) {
+        val deviceId = SecurityServices.pairedDevices.currentDeviceId()
+        if (deviceId == null) {
+            Snackbar.make(binding.root, R.string.no_pairing_secret, Snackbar.LENGTH_LONG).show()
+            return
+        }
+
+        val labels = arrayOf(
+            getString(R.string.grant_once),
+            getString(R.string.grant_15_minutes),
+            getString(R.string.grant_1_hour),
+            getString(R.string.grant_until_revoked),
+        )
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.grant_duration_title)
+            .apply { warning?.let { setMessage(it) } }
+            .setNegativeButton(R.string.btn_cancel, null)
+            .setItems(labels) { _, which ->
+                val now = System.currentTimeMillis()
+                val duration = when (which) {
+                    0 -> GrantDuration.Once
+                    1 -> GrantDuration.Until(now + 15 * 60_000L)
+                    2 -> GrantDuration.Until(now + 60 * 60_000L)
+                    else -> GrantDuration.UntilRevoked
+                }
+                SecurityServices.authorization.grant(
+                    deviceId = deviceId,
+                    permission = permission,
+                    duration = duration,
+                    note = "Granted on device by the owner",
+                )
+                SecurityServices.auditLogger.record(
+                    type = AuditEventType.PERMISSION_GRANTED,
+                    deviceId = deviceId,
+                    permission = permission,
+                    detail = "Granted on device by the owner",
+                )
+                renderGrants()
+                Snackbar.make(binding.root, R.string.granted_toast, Snackbar.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun revokeAll() {
+        val deviceId = SecurityServices.pairedDevices.currentDeviceId() ?: return
+        val revoked = SecurityServices.authorization.revokeAll(deviceId)
+        if (revoked > 0) {
+            SecurityServices.auditLogger.record(
+                type = AuditEventType.PERMISSION_REVOKED,
+                deviceId = deviceId,
+                detail = "All command access revoked on device by the owner",
+            )
+        }
+        renderGrants()
+        Snackbar.make(binding.root, R.string.revoked_toast, Snackbar.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Shows the privileged-operation trail.
+     *
+     * Only the privileged events, not every log line: this answers "what has been run with
+     * elevated access on my phone", and padding it with connection chatter would bury the
+     * one entry that matters.
+     */
+    private fun showAuditLog() {
+        val events = SecurityServices.auditLogger.events.value
+            .filter { it.type in PRIVILEGED_EVENTS }
+            .takeLast(100)
+
+        val body = if (events.isEmpty()) {
+            getString(R.string.audit_empty)
+        } else {
+            events.reversed().joinToString("\n\n") { event ->
+                "${formatTimestamp(event.timestampMillis)}\n${event.describe()}"
+            }
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.audit_title)
+            .setMessage(body)
+            .setPositiveButton(R.string.btn_close, null)
+            .show()
+    }
+
+    private fun formatTimestamp(millis: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date(millis))
 
     private fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -328,6 +488,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private companion object {
+
+        /** The events the audit dialog shows: privileged operations and authority changes. */
+        val PRIVILEGED_EVENTS = setOf(
+            AuditEventType.SHELL_EXECUTED,
+            AuditEventType.ROOT_EXECUTED,
+            AuditEventType.AUTHORIZATION_DENIED,
+            AuditEventType.PERMISSION_GRANTED,
+            AuditEventType.PERMISSION_REVOKED,
+            AuditEventType.DEVICE_UNPAIRED,
+            AuditEventType.AUDIT_CLEARED,
+        )
         // Ports below 1024 need privileges an app does not have, so they are rejected up
         // front rather than surfacing later as an opaque bind failure.
         const val MIN_PORT = 1024

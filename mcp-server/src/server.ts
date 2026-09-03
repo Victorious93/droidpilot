@@ -23,6 +23,18 @@ function fail(text: string): ToolResult {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+/**
+ * How long this client waits for a shell reply.
+ *
+ * Always longer than the timeout the device is being asked to enforce, so that a command
+ * which the device times out cleanly reports as a timeout *from the device* — with its
+ * partial output and audit record — rather than as this client giving up first and leaving
+ * the caller unable to tell whether anything ran.
+ */
+function shellTimeoutFor(params: { timeout?: number }): number {
+  return (params.timeout ?? 30_000) + 20_000;
+}
+
 export function createServer(): McpServer {
   const server = new McpServer({ name: "droidpilot", version: "2.0.0" });
 
@@ -126,6 +138,24 @@ export function createServer(): McpServer {
   );
 
   server.tool("get_focused", toolDefinitions.get_focused.description, {}, () => send("get_focused"));
+
+  // Shell tools declare initiator "ai", which is the truth: every command that reaches this
+  // server was chosen by a model. That is what makes the device's AI_ROOT gate meaningful —
+  // an owner who grants REMOTE_ROOT but withholds AI_ROOT will find that root commands from
+  // here are refused, which is exactly what withholding it is supposed to mean.
+  server.tool(
+    "shell",
+    toolDefinitions.shell.description,
+    toolDefinitions.shell.inputSchema,
+    (p) => send("shell", { ...p, initiator: "ai" }, shellTimeoutFor(p)),
+  );
+
+  server.tool(
+    "shell_root",
+    toolDefinitions.shell_root.description,
+    toolDefinitions.shell_root.inputSchema,
+    (p) => send("shell_root", { ...p, initiator: "ai" }, shellTimeoutFor(p)),
+  );
 
   server.tool("screenshot", toolDefinitions.screenshot.description, toolDefinitions.screenshot.inputSchema, (p) =>
     send("screenshot", p, 30_000),

@@ -1,14 +1,17 @@
 # Security Audit
 
 Date: 2026-09-03
-Scope: the shipped transport and command path, plus the authorisation core as a library.
+Scope: the shipped transport and command path, including the authorised shell route.
 Companion to [SECURITY.md](SECURITY.md), which states the design; this document records what
 an adversarial read of the implementation found.
 
-**A framing point that governs everything below.** The authorisation core is not reachable
-from the running application (see `PHASE_3_AUDIT.md` §3). Its properties are real and
-tested, but they currently protect a library, not a user. Any sentence here about root
-authorisation describes code that no production path invokes.
+**Framing.** The authorisation core is now reachable from the running application: `shell`
+and `shell_root` commands route through it, and are refused unless the owner has granted the
+matching permission. Statements below about root authorisation therefore describe what the
+app enforces, not what a library could enforce. Ordinary automation commands — tap,
+screenshot, UI tree — remain governed by transport authentication alone, deliberately: a
+peer holding the pairing secret already has full screen read and control, so a second gate
+in front of `tap` would break every user and buy nothing.
 
 ---
 
@@ -23,6 +26,7 @@ What an attacker on the same network can actually reach today:
 | Authentication | 256-bit pairing secret, verified during the HTTP upgrade |
 | Post-handshake frames | AES-256-GCM, replay-rejecting, direction-separated |
 | Outbound requests | None — the app makes no network requests of its own |
+| Shell / root commands | Reachable only with an explicit, unexpired, unrevoked owner grant; none exists by default |
 
 There is no unauthenticated endpoint. A peer that fails authentication is rejected inside
 `onWebsocketHandshakeReceivedAsServer`, before a WebSocket exists, so it never reaches a
@@ -73,9 +77,10 @@ Each was probed for a bypass and none was found; each is covered by tests.
 
 | Id | Severity | Finding |
 |---|---|---|
-| F-01 | Architectural | The authorisation core guards nothing at runtime; it is unreachable from the app |
+| ~~F-01~~ | — | **Closed.** The core is on the command path; see `PHASE_3_BUGS.md` |
 | F-02 | Design question | `AI_ROOT` gates root only. An AI-initiated *unprivileged* shell needs `REMOTE_SHELL` alone; there is no AI-specific gate for it |
-| F-03 | P3 | Grant ids can collide inside one millisecond, overwriting the superseded record. Must be fixed before grants are persisted |
+| F-06 | Stated limitation | The `initiator` field is supplied by the peer, so `AI_ROOT` is a policy control between an honest client and its owner, not a boundary against a hostile one. DroidPilot's MCP server declares every command as AI-initiated, which is truthful and makes the gate meaningful in the shipped deployment |
+| ~~F-03~~ | — | **Closed.** Ids carry a sequence number; fixed before grants were persisted |
 | F-04 | P3, latent | The audit callback runs while the authorisation lock is held; a persistent logger doing I/O would serialise authorisation behind disk writes |
 | F-05 | Accepted | Grant expiry uses wall-clock time, which can move backwards. Revocation and single-use are unaffected; only the device owner can change the clock |
 
@@ -100,15 +105,25 @@ privileged paths.
 
 ## 4. Injection
 
-There is no shell on the live path. `CommandDispatcher` routes every parameter to
+**There is now a shell on the live path**, and this section is written on the assumption
+that a reader has come here to find out how dangerous that is.
+
+For the automation commands, nothing changed: `CommandDispatcher` routes every parameter to
 accessibility selectors and gesture APIs, never to a command interpreter — confirmed by
 fuzzing with shell, format-string and path-traversal payloads as parameter values (~28,000
-dispatches, no exception, every refusal structured).
+dispatches, no exception, every refusal structured). Those parameters cannot reach a shell
+because there is no code path from them to one.
 
-On the library path, `ShellExecutor` deliberately exposes two entry points: `execute` takes
-the command as a single string, because that string *is* the payload the owner authorised;
-and `executeArgv` takes an argument vector with no shell, which is the required choice
-whenever any part of the command comes from the app's own parameters. That split is the
+For `shell` and `shell_root`, the command string is passed to a shell *by design* — it is
+the payload the owner explicitly authorised, and interpreting it is the entire feature.
+There is no injection boundary to defend inside it, and no blocklist pretending otherwise.
+The boundary sits in front: owner authorisation, an identity derived from the pairing
+secret, a live grant for the specific permission, and replay rejection. A caller who reaches
+the shell has been authorised to reach the shell.
+
+Where DroidPilot builds a command from its *own* parameters, `ShellExecutor.executeArgv`
+takes an argument vector with no shell to interpret it. That split — `execute` for an
+owner-authored command, `executeArgv` for anything assembled from parts — is the real
 injection boundary, and it is documented at the interface.
 
 ---
@@ -125,7 +140,9 @@ What it does not provide:
 - **No forward secrecy.** Traffic recorded today can be decrypted by anyone who later learns
   the secret. Regenerating the secret bounds the exposure window.
 - **No identity beyond the secret.** Anyone holding it is indistinguishable from the
-  legitimate client. There is no device identity layer yet.
+  legitimate client. Device identity is *derived* from the secret rather than asserted, which
+  makes grants revocable by rotating it — but it does not distinguish two holders of the same
+  secret, because nothing can.
 - **No certificate infrastructure**, and therefore no certificate validation to weaken. No
   code disables verification anywhere, because there is none to disable.
 
@@ -153,15 +170,14 @@ lost an answer. Sealing and writing are now serialised per connection.
 
 ## 7. Recommendations, in priority order
 
-1. **Wire the authorisation core into a real command path, or say plainly that it guards
-   nothing.** This is the single largest gap between what the documentation implies and what
-   the app enforces. The README's status table now says so; the code should eventually make
-   it unnecessary.
-2. **Persist grants and the audit trail** — both are in-memory and vanish with the process,
-   which means revocation does not survive a restart and the trail cannot be reviewed after
-   one. Fix F-03 first, since persistence makes id collisions permanent.
-3. **Move the audit callback outside the authorisation lock** (F-04) before the logger does
-   any I/O.
+1. **Persist the audit trail.** Grants now survive a restart; the trail does not, so the
+   record of what was run with elevated access is lost when the process dies — which is
+   precisely when someone would want to read it.
+2. **Move the audit callback outside the authorisation lock** (F-04) before the logger does
+   any I/O. Persisting the trail is exactly the change that would make this bite.
+3. **Get the grant UI under test.** The authorisation logic behind it is covered thoroughly;
+   the screen that issues and revokes grants is not, and it is now the least-verified part
+   of a security-critical flow.
 4. **Decide F-02** — whether AI-initiated unprivileged shell needs its own gate.
 5. **Consider forward secrecy** for the transport if the threat model ever includes an
    attacker who records traffic now and compromises the secret later.

@@ -10,6 +10,44 @@ import { z } from "zod";
  * model given both will otherwise reach for the picture.
  */
 export const toolDefinitions = {
+  shell: {
+    description:
+      "Run an unprivileged shell command on the device. Requires the device owner to have granted " +
+      "REMOTE_SHELL in the DroidPilot app; without a live grant the device refuses and nothing runs. " +
+      "A shell can read files and run binaries the accessibility automation cannot, which is why it is " +
+      "authorised separately from pairing. Returns stdout, stderr and the exit code.",
+    inputSchema: {
+      command: z.string().min(1).describe("The command line to run, e.g. 'getprop ro.build.version.sdk'"),
+      timeout: z
+        .number()
+        .int()
+        .min(1000)
+        .max(600000)
+        .optional()
+        .describe("How long the device should let the command run, in milliseconds (default 30000)"),
+    },
+  },
+
+  shell_root: {
+    description:
+      "Run a shell command as root. Requires BOTH of two separate grants from the device owner: " +
+      "REMOTE_ROOT, and AI_ROOT because this request comes from an AI. Either one missing means the " +
+      "command is refused and nothing runs. It also requires the device to actually have a working root " +
+      "provider — DroidPilot cannot root a device, only use root it already has. Every attempt, allowed " +
+      "or refused, is recorded in the device's audit log. Prefer the unprivileged 'shell' tool unless " +
+      "root is genuinely required.",
+    inputSchema: {
+      command: z.string().min(1).describe("The command line to run as root"),
+      timeout: z
+        .number()
+        .int()
+        .min(1000)
+        .max(600000)
+        .optional()
+        .describe("How long the device should let the command run, in milliseconds (default 30000)"),
+    },
+  },
+
   connect: {
     description:
       "Connect to an Android device running DroidPilot. Must be called before any other tool. " +

@@ -20,7 +20,12 @@ export class FakeDevice {
   private readonly channels = new Map<WebSocket, SecureChannel>();
 
   /** Commands received, so tests can assert what the client actually sent. */
-  readonly received: Array<{ id: string; command: string; params: Record<string, unknown> }> = [];
+  readonly received: Array<{
+    id: string;
+    command: string;
+    params: Record<string, unknown>;
+    timestamp?: number;
+  }> = [];
 
   /**
    * Replaceable per test to script a specific reply.
