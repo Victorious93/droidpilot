@@ -9,6 +9,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pilot / Developer & Agent mode switching** (`core/mode/AppMode.kt`, `AppModeStore`), a
+  persisted, device-side preference reported to connected clients via
+  `get_capabilities.mode`. Switching modes grants no permission by itself; every command
+  still goes through the existing authorisation core unchanged.
+- **Standardised command outcomes** (`agent/ActionStatus.kt`): every `ErrorCode` maps to one
+  of `SUCCESS`/`FAILED`/`BLOCKED`/`REQUIRES_PERMISSION`/`REQUIRES_USER`/`RETRYABLE`.
+- **An in-app execution history** (`agent/ExecutionTracker.kt`) for Developer & Agent mode:
+  every dispatched command (excluding `ping`/`get_capabilities`) is recorded with its
+  outcome, and the owner can view a summary and full details from the main screen.
+- **`bundleRelease`** now runs alongside `assembleDebug`/`assembleRelease` in CI on every
+  push, and a new tag-triggered `.github/workflows/release.yml` builds and attaches a debug
+  APK, release APK/AAB, and `SHA256SUMS.txt` to a draft GitHub Release — signed if
+  `ANDROID_KEYSTORE_BASE64` and related secrets are configured, clearly labelled unsigned
+  otherwise.
+- 18 new unit tests covering the above (`AppModeStoreTest`, `ActionStatusTest`,
+  `ExecutionTrackerTest`, `CommandDispatcherExecutionTrackingTest`).
+
+### Fixed
+
+- README documented the release-signing environment variable as
+  `DROIDPILOT_KEYSTORE_PATH`; the build script actually reads `DROIDPILOT_KEYSTORE`. Corrected.
+
 - **35 instrumented tests**, closing the project's largest verification gap. Everything
   touching `AccessibilityService` and the Android Keystore was previously verified by
   reading the code, not by running it.

@@ -21,9 +21,11 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.mobilemcp.pro.R
+import com.mobilemcp.pro.agent.ExecutionStep
 import com.mobilemcp.pro.core.NetworkAddresses
 import com.mobilemcp.pro.core.SecurityServices
 import com.mobilemcp.pro.core.audit.AuditEventType
+import com.mobilemcp.pro.core.mode.AppMode
 import com.mobilemcp.pro.core.permission.GrantDuration
 import com.mobilemcp.pro.core.permission.RemotePermission
 import com.mobilemcp.pro.databinding.ActivityMainBinding
@@ -77,8 +79,10 @@ class MainActivity : AppCompatActivity() {
         secretStore = PairingSecretStore(this)
 
         wireActions()
+        wireMode()
         observeServerState()
         observeLogs()
+        observeExecutionHistory()
         maybeRequestNotificationPermission()
     }
 
@@ -89,6 +93,109 @@ class MainActivity : AppCompatActivity() {
         renderAccessibilityState()
         renderAddresses()
         renderGrants()
+    }
+
+    // ------------------------------------------------------------------- mode
+
+    /**
+     * Renders the persisted [AppMode] and lets the owner switch it.
+     *
+     * The toggle only changes what this screen shows and what `get_capabilities` reports —
+     * see [AppMode]'s own docs. It never grants a permission, so there is deliberately no
+     * confirmation dialog here the way there is for [confirmGrant].
+     */
+    private fun wireMode() {
+        renderMode(SecurityServices.modeStore.get())
+
+        binding.modeToggleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            val mode = if (checkedId == binding.btnModeDeveloperAgent.id) {
+                AppMode.DEVELOPER_AGENT
+            } else {
+                AppMode.PILOT
+            }
+            SecurityServices.modeStore.set(mode)
+            renderMode(mode)
+        }
+    }
+
+    private fun renderMode(mode: AppMode) {
+        val checkedId = if (mode == AppMode.DEVELOPER_AGENT) {
+            binding.btnModeDeveloperAgent.id
+        } else {
+            binding.btnModePilot.id
+        }
+        if (binding.modeToggleGroup.checkedButtonId != checkedId) {
+            binding.modeToggleGroup.check(checkedId)
+        }
+        binding.tvModeDescription.setText(
+            if (mode == AppMode.DEVELOPER_AGENT) {
+                R.string.mode_developer_agent_description
+            } else {
+                R.string.mode_pilot_description
+            },
+        )
+        binding.cardExecution.isVisible(mode == AppMode.DEVELOPER_AGENT)
+    }
+
+    // -------------------------------------------------------- execution history
+
+    private fun observeExecutionHistory() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SecurityServices.executionTracker.steps.collectLatest(::renderExecution)
+            }
+        }
+    }
+
+    private fun renderExecution(steps: List<ExecutionStep>) {
+        binding.tvExecutionSummary.text = if (steps.isEmpty()) {
+            getString(R.string.execution_empty)
+        } else {
+            steps.takeLast(EXECUTION_SUMMARY_ROWS).joinToString("\n") { step ->
+                "${statusGlyph(step.status)} ${step.command} — ${step.summary}"
+            }
+        }
+        binding.btnClearExecution.setOnClickListener { SecurityServices.executionTracker.clear() }
+        binding.btnViewExecutionDetails.setOnClickListener { showExecutionDetails(steps) }
+    }
+
+    private fun statusGlyph(status: com.mobilemcp.pro.agent.ActionStatus): String = when (status) {
+        com.mobilemcp.pro.agent.ActionStatus.SUCCESS -> "✓"
+        com.mobilemcp.pro.agent.ActionStatus.FAILED -> "✗"
+        com.mobilemcp.pro.agent.ActionStatus.BLOCKED -> "⛔"
+        com.mobilemcp.pro.agent.ActionStatus.REQUIRES_PERMISSION -> "🔒"
+        com.mobilemcp.pro.agent.ActionStatus.REQUIRES_USER -> "?"
+        com.mobilemcp.pro.agent.ActionStatus.RETRYABLE -> "↻"
+    }
+
+    /** The expanded view: every recorded step, in order, with its error when it failed. */
+    private fun showExecutionDetails(steps: List<ExecutionStep>) {
+        val body = if (steps.isEmpty()) {
+            getString(R.string.execution_details_empty)
+        } else {
+            steps.reversed().joinToString("\n\n") { step ->
+                buildString {
+                    append(formatTimestamp(step.startedAtMillis))
+                    append("  ")
+                    append(statusGlyph(step.status))
+                    append("  ")
+                    append(step.command)
+                    append(" — ")
+                    append(step.status.name)
+                    if (step.error != null) {
+                        append("\n")
+                        append(step.error)
+                    }
+                }
+            }
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.execution_details_title)
+            .setMessage(body)
+            .setPositiveButton(R.string.btn_close, null)
+            .show()
     }
 
     // ------------------------------------------------------------------- actions
@@ -503,5 +610,8 @@ class MainActivity : AppCompatActivity() {
         // front rather than surfacing later as an opaque bind failure.
         const val MIN_PORT = 1024
         const val MAX_PORT = 65535
+
+        /** Rows shown inline in the execution card; the details dialog shows the full history. */
+        const val EXECUTION_SUMMARY_ROWS = 8
     }
 }

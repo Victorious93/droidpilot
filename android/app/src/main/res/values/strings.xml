@@ -93,4 +93,19 @@
     <string name="no_pairing_secret">Start the server once to create a pairing secret before granting access.</string>
     <string name="btn_close">Close</string>
     <string name="btn_cancel">Cancel</string>
+
+    <string name="mode_title">Mode</string>
+    <string name="mode_explainer">Changes what this screen shows and what the app reports to a connected client. Every command still requires the same authorisation as it does today — switching modes grants nothing.</string>
+    <string name="mode_pilot">Pilot</string>
+    <string name="mode_pilot_description">"Tell me what to do on this device, and I\'ll do it." Direct commands, one at a time.</string>
+    <string name="mode_developer_agent">Developer &amp; Agent</string>
+    <string name="mode_developer_agent_description">"Give me an objective, and I\'ll plan, execute, observe, and iterate." Shows the execution history below.</string>
+
+    <string name="execution_title">Execution history</string>
+    <string name="execution_explainer">Commands the paired client has sent, in this session, and what happened to each.</string>
+    <string name="execution_empty">No commands executed yet in this session.</string>
+    <string name="btn_clear_execution">Clear</string>
+    <string name="btn_view_execution_details">View details</string>
+    <string name="execution_details_title">Execution details</string>
+    <string name="execution_details_empty">No commands executed yet in this session.</string>
 </resources>

@@ -3,7 +3,9 @@ package com.mobilemcp.pro.core
 import android.content.Context
 import com.mobilemcp.pro.core.audit.AuditEventType
 import com.mobilemcp.pro.core.audit.AuditLogger
+import com.mobilemcp.pro.agent.ExecutionTracker
 import com.mobilemcp.pro.core.identity.SecretBoundPairedDeviceRegistry
+import com.mobilemcp.pro.core.mode.AppModeStore
 import com.mobilemcp.pro.core.permission.AuthorizationDecision
 import com.mobilemcp.pro.core.permission.AuthorizationManager
 import com.mobilemcp.pro.core.permission.PersistentGrantStore
@@ -47,6 +49,17 @@ object SecurityServices {
     val isInitialized: Boolean get() = ::appContext.isInitialized
 
     val grantStore: PersistentGrantStore by lazy { PersistentGrantStore(appContext) }
+
+    /** The owner's Pilot / Developer-Agent mode preference. Not itself a permission grant. */
+    val modeStore: AppModeStore by lazy { AppModeStore(appContext) }
+
+    /**
+     * Live history of dispatched commands, for the Developer/Agent-mode execution panel.
+     *
+     * One instance per process, like [auditLogger], so the panel shown while the server is
+     * running reflects what that same server actually dispatched.
+     */
+    val executionTracker: ExecutionTracker by lazy { ExecutionTracker() }
 
     val auditLogger: AuditLogger by lazy { AuditLogger() }
 
