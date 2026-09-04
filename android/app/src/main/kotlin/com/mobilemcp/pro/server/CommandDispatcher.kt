@@ -1,11 +1,15 @@
 package com.mobilemcp.pro.server
 
 import android.util.Log
+import com.mobilemcp.pro.agent.ActionStatus
+import com.mobilemcp.pro.agent.ExecutionStep
+import com.mobilemcp.pro.agent.ExecutionTracker
 import com.mobilemcp.pro.automation.DeviceAutomator
 import com.mobilemcp.pro.automation.ElementSelector
 import com.mobilemcp.pro.automation.ScrollDirection
 import com.mobilemcp.pro.automation.SystemKey
 import com.mobilemcp.pro.core.ErrorCode
+import com.mobilemcp.pro.core.mode.AppMode
 import com.mobilemcp.pro.core.root.ShellLimits
 import com.mobilemcp.pro.core.OperationResult
 import com.mobilemcp.pro.protocol.CommandRequest
@@ -48,6 +52,15 @@ class CommandDispatcher(
      * to an elevated shell at all.
      */
     private val privileged: PrivilegedCommandGateway? = null,
+    /** What `get_capabilities` reports as the device's current operating mode. */
+    private val currentMode: () -> AppMode = { AppMode.DEFAULT },
+    /**
+     * Records every dispatched command for the owner-facing execution history.
+     *
+     * Null by default so existing callers (and the tests written against them) are
+     * unaffected; `ServerForegroundService` is the only production caller that supplies one.
+     */
+    private val tracker: ExecutionTracker? = null,
 ) {
 
     /**
@@ -59,7 +72,8 @@ class CommandDispatcher(
      * automation commands do not consult it; the privileged ones refuse without it.
      */
     suspend fun dispatch(request: CommandRequest, callerDeviceId: String? = null): CommandResponse {
-        return try {
+        val startedAt = System.currentTimeMillis()
+        val response = try {
             withTimeout(deadlineFor(request)) {
                 execute(request, callerDeviceId)
             }
@@ -79,6 +93,38 @@ class CommandDispatcher(
                 "Internal error handling '${request.command}': ${e.javaClass.simpleName}",
             )
         }
+        recordExecution(request, response, startedAt)
+        return response
+    }
+
+    /**
+     * Appends [response] to the execution history, when one is configured.
+     *
+     * `ping` and `get_capabilities` are excluded: they are polling, not an action the owner
+     * asked the agent to take, and including them would drown the history that matters in
+     * connection-health noise.
+     */
+    private fun recordExecution(request: CommandRequest, response: CommandResponse, startedAt: Long) {
+        val tracker = tracker ?: return
+        if (request.command == "ping" || request.command == "get_capabilities") return
+
+        val status = if (response.success) {
+            ActionStatus.SUCCESS
+        } else {
+            response.errorCode?.let(ActionStatus::from) ?: ActionStatus.FAILED
+        }
+
+        tracker.record(
+            ExecutionStep(
+                requestId = request.id,
+                command = request.command,
+                status = status,
+                summary = if (response.success) "Completed" else "Failed",
+                error = response.error,
+                startedAtMillis = startedAt,
+                finishedAtMillis = System.currentTimeMillis(),
+            ),
+        )
     }
 
     private suspend fun execute(request: CommandRequest, callerDeviceId: String?): CommandResponse {
@@ -124,6 +170,7 @@ class CommandDispatcher(
                         put("accessibilityConnected", automator != null)
                         put("protocolVersion", Protocol.VERSION)
                         put("appVersion", appVersion)
+                        put("mode", currentMode().wireName)
                     },
                 )
             }

@@ -111,6 +111,11 @@ and the refusal happens before anything runs.
 | `AuditLogger` — privileged-operation trail, sizes not contents | 9 tests |
 | Owner UI for granting, revoking access | 5 instrumented tests, against the real dialog and a real device identity |
 | Owner UI for reviewing the audit trail | Not covered by an automated test — see [Limitations](#limitations) |
+| `AppMode` / `AppModeStore` — Pilot vs Developer & Agent preference, persisted across restarts | Unit tested |
+| `ActionStatus` — standardised command outcome (`SUCCESS`/`FAILED`/`BLOCKED`/`REQUIRES_PERMISSION`/`RETRYABLE`/`REQUIRES_USER`), mapped from every `ErrorCode` | Unit tested |
+| `ExecutionTracker` — bounded, in-memory history of dispatched commands for the execution panel | Unit tested |
+| `CommandDispatcher` reporting `mode` in `get_capabilities` and recording every non-polling command into `ExecutionTracker` | Unit tested, 9 tests |
+| Owner UI — Pilot / Developer & Agent toggle and the execution-history panel it reveals | Not covered by an automated test — see [Limitations](#limitations) |
 
 Those 22 wiring tests assert on whether a command *ran*, not on what a decision object said.
 Removing the authorisation check from the handler turns 18 tests red across the suite, which
@@ -122,8 +127,7 @@ Designed or discussed, but absent from the codebase. Do not rely on any of it.
 
 | Capability | Status |
 |---|---|
-| Developer Mode (autonomous build/test/fix loop) | Planned |
-| Dual-mode manager / mode switching | Planned |
+| Developer/Agent Mode's own plan/execute/observe/verify/replan loop, and an autonomous build/test/fix cycle | Planned — see [Operating modes](#operating-modes) below |
 | Device-to-device pairing (a second phone as a peer) | Planned — a single identity, derived from the pairing secret, exists today |
 | Remote device control (device A → device B) | Planned |
 | Remote command bus / offline queue | Planned |
@@ -365,7 +369,7 @@ locating elements, dispatching gestures and text, pressing system keys, capturin
 screen. This is what the app does today, and it is covered by instrumented tests that run on
 a real emulator in CI.
 
-### Developer Mode — *planned, not implemented*
+### Developer Mode — *the device-side half is implemented; the loop itself is not*
 
 > *"Give me an objective, and I'll plan, build, test, diagnose, fix, and iterate."*
 
@@ -375,11 +379,24 @@ The intended workflow:
 Objective → Analyze → Plan → Inspect → Modify → Build → Install → Test → Diagnose → Fix → Rebuild → Retest
 ```
 
-No part of this exists in the repository yet. One constraint is worth stating up front,
-because it shapes the design: Android ships no JDK, no Gradle and no compiler, and an app
-cannot install an APK without device-owner or root privileges. A build loop therefore
-belongs on a host that has the toolchain and the repository, with the device half — launch,
-drive, inspect, read logs — being what this project already does well.
+**What exists today:** a device-side `AppMode` the owner can switch (`core/mode/AppMode.kt`),
+persisted across restarts, reported to a connected client via `get_capabilities.mode`. When
+Developer & Agent is selected, the app shows a live execution-history panel: every dispatched
+command, whether it succeeded, and — via a details dialog — its error when it failed. Every
+command's outcome is classified into one of six standardised statuses (`SUCCESS`, `FAILED`,
+`BLOCKED`, `REQUIRES_PERMISSION`, `REQUIRES_USER`, `RETRYABLE` — see `agent/ActionStatus.kt`),
+so a client can decide whether to retry, ask the owner, or stop.
+
+**What does not exist:** switching modes does not run a plan/execute/observe/verify/replan
+loop on the device, and there is no autonomous build/test/fix cycle anywhere in this
+repository. One constraint shapes why that loop, when it exists, will not live entirely
+on-device: Android ships no JDK, no Gradle and no compiler, and this app cannot install an
+APK without device-owner or root privileges. A build loop therefore has to run on a host with
+the toolchain and the repository — this is exactly the shape DroidPilot Forge already has,
+since the agent is the MCP client on the other end of the socket, not a model on the device.
+Developer/Agent Mode's job on the *device* side is to make that external agent's objective
+loop legible to the owner (what ran, what happened) and to keep every step it takes subject to
+the same authorisation core Pilot Mode uses — not to run the loop itself.
 
 ---
 
@@ -404,20 +421,36 @@ cd android
 ./gradlew lintDebug lintRelease    # lint (abortOnError is on)
 ./gradlew assembleDebug            # debug APK
 ./gradlew assembleRelease          # release APK — unsigned unless credentials are supplied
+./gradlew bundleRelease            # release AAB (Play Console upload format)
 ./gradlew connectedDebugAndroidTest # instrumented tests (needs a device or emulator)
 ```
 
-APK output paths:
+APK/AAB output paths:
 
 ```
 android/app/build/outputs/apk/debug/app-debug.apk
-android/app/build/outputs/apk/release/app-release.apk
+android/app/build/outputs/apk/release/app-release.apk            # signed build
+android/app/build/outputs/apk/release/app-release-unsigned.apk   # unsigned build (no credentials)
+android/app/build/outputs/bundle/release/app-release.aab
 ```
 
-Release signing is read from `DROIDPILOT_KEYSTORE_PATH`, `DROIDPILOT_KEYSTORE_PASSWORD`,
-`DROIDPILOT_KEY_ALIAS` and `DROIDPILOT_KEY_PASSWORD`, or from a local `keystore.properties`.
-Without them the release variant builds **unsigned** — it still exercises R8 and resource
-shrinking, but cannot be installed. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Release signing is read from the environment variables `DROIDPILOT_KEYSTORE` (path to the
+`.jks`/`.keystore` file), `DROIDPILOT_KEYSTORE_PASSWORD`, `DROIDPILOT_KEY_ALIAS` and
+`DROIDPILOT_KEY_PASSWORD`, or from a local `keystore.properties` (`storeFile`, `storePassword`,
+`keyAlias`, `keyPassword`) — see `android/app/build.gradle.kts`. Without them the release
+variant builds **unsigned** — it still exercises R8 and resource shrinking, but cannot be
+installed. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Every push runs `.github/workflows/ci.yml`, which builds all three (debug APK, release
+APK, release AAB), stages them under `android/staging/` with stable names
+(`DroidPilot-debug.apk`, `DroidPilot-release.apk`, `DroidPilot-release.aab`,
+`SHA256SUMS.txt`) and uploads them as a build artifact. Pushing a tag matching `v*.*.*` runs
+`.github/workflows/release.yml`, which does the same build and attaches the results to a
+**draft** GitHub Release for that tag — signed if the repository has
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
+`ANDROID_KEY_PASSWORD` configured as secrets, clearly labelled unsigned otherwise. The
+workflow does not publish the release automatically; a maintainer reviews and publishes the
+draft.
 
 **MCP server**
 
@@ -520,6 +553,11 @@ yet:
 - Authorization, root-detection and audit components, wired into the command path
 - Authorised `shell` and `shell_root` commands, denied by default
 - Persistent grants, and an owner UI to grant, revoke and review
+- Pilot / Developer & Agent mode switching, persisted, reported via `get_capabilities`
+- Standardised command-outcome classification (`ActionStatus`) and an in-app execution
+  history for Developer/Agent mode
+- Release AAB build (`bundleRelease`) and a tag-triggered draft-release workflow with
+  checksums, alongside the existing per-push CI build
 
 **In development**
 
@@ -527,13 +565,19 @@ yet:
 
 **Planned**
 
+- Developer/Agent Mode's own plan/execute/observe/verify/replan loop (today the device side
+  reports mode and shows execution history; the loop itself runs in the off-device MCP
+  client, unchanged)
+- An autonomous build/test/fix cycle, hosted off-device
 - Device identity and device-to-device pairing
 - Remote device control and command bus, with an offline queue
 - Root sessions and root automations
-- Developer Mode build/test/fix loop, hosted off-device
 - Knowledge graph
 - AI provider abstraction, context retrieval and token budgeting
 - Remote and Developer UIs
+- Vision (screenshot + vision-model analysis as a fallback to the UI tree), memory, voice,
+  notification reading, and a routines/automations system — all evaluated against OpenDroid
+  as a reference and intentionally deferred; see the note in CONTRIBUTING.md
 
 ---
 

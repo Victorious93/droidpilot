@@ -126,6 +126,8 @@ class ServerForegroundService : LifecycleService() {
                             // the authorisation core reachable at all; without it the shell
                             // commands answer "unsupported" and nothing can elevate.
                             privileged = SecurityServices.privilegedCommands,
+                            currentMode = SecurityServices.modeStore::get,
+                            tracker = SecurityServices.executionTracker,
                         ),
                         automatorProvider = AutomatorRegistry::get,
                         appVersion = BuildConfig.VERSION_NAME,

@@ -17,10 +17,11 @@ sdk.dir=/path/to/Android/sdk
 ```bash
 # Android
 cd android
-./gradlew testDebugUnitTest     # 187 unit tests, no device needed
+./gradlew testDebugUnitTest     # 252 unit tests, no device needed
 ./gradlew lintDebug lintRelease # lint; abortOnError is on
 ./gradlew assembleDebug
 ./gradlew assembleRelease
+./gradlew bundleRelease         # release AAB
 
 # Instrumented tests — needs a connected device or a running emulator.
 # These cover the Accessibility layer and the real Android Keystore, which have no
@@ -150,3 +151,23 @@ what makes the change reviewable and the test meaningful.
 
 Do not commit secrets, keystores, `local.properties`, or generated `dist/` and `build/`
 output.
+
+## On the OpenDroid comparison
+
+This project was audited against [OpenDroid](https://github.com/Victorious93/opendroid), a
+larger, separate Android AI-agent app with an on-device LLM-driven agent loop, provider
+abstraction (OpenAI/Claude/Gemini/Ollama/local models), tiered memory with a knowledge
+graph, vision fallback, voice (STT/TTS/wake-word), a `NotificationListenerService`, and a
+habit-based routines engine — none of which exist in this repository. Two of those,
+Pilot/Developer-Agent mode switching and a standardised, owner-visible execution history,
+were ported in the shape that fits this project's architecture (the agent is the *external*
+MCP client, not an on-device model — see [How it works](README.md#how-it-works)). The rest
+were deliberately deferred rather than partially stubbed: each is a substantial subsystem
+in its own right (an LLM provider abstraction and credential store; a Room-backed memory
+architecture with Keystore-backed encryption for the sensitive tier; a vision pipeline;
+voice; a `NotificationListenerService`; a scheduler for routines), and none is required for
+the security-critical work — authorisation, root, MCP, and now mode/execution reporting —
+this project treats as load-bearing. If you want to pick one up, open an issue describing
+which piece and how it should plug into the existing authorisation core before writing code,
+since bypassing `AuthorizationManager` for a new capability is the mistake this project
+exists to not make.

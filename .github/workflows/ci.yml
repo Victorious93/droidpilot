@@ -55,14 +55,34 @@ jobs:
         # fails at runtime while debug builds stay green.
         run: ./gradlew assembleRelease --stacktrace
 
-      - name: Upload APKs
+      - name: Bundle release AAB
+        # Same unsigned caveat as the release APK above — this is what a Play Console
+        # upload needs, exercised on every push rather than only at release time.
+        run: ./gradlew bundleRelease --stacktrace
+
+      - name: Stage artifacts under clear, stable names
+        # The Gradle output paths encode the variant (debug/release) rather than the
+        # project name, and change shape between APK and AAB. Staging them under one
+        # directory with the names this project documents keeps CI's uploaded artifact
+        # names matching what a person downloading them would expect.
+        run: |
+          mkdir -p staging
+          cp app/build/outputs/apk/debug/app-debug.apk staging/DroidPilot-debug.apk
+          # Gradle names the release APK app-release.apk when it is signed and
+          # app-release-unsigned.apk when it is not; CI has no signing credentials, but a
+          # fork or a future run with them configured should still be staged correctly.
+          release_apk=$(ls app/build/outputs/apk/release/app-release*.apk | head -n1)
+          cp "$release_apk" staging/DroidPilot-release.apk
+          cp app/build/outputs/bundle/release/app-release.aab staging/DroidPilot-release.aab
+          ( cd staging && sha256sum *.apk *.aab > SHA256SUMS.txt )
+          cat staging/SHA256SUMS.txt
+
+      - name: Upload APKs and AAB
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: droidpilot-apks
-          path: |
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/release/*.apk
+          path: android/staging/*
           if-no-files-found: error
           retention-days: 14
 
