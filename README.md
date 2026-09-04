@@ -109,7 +109,8 @@ and the refusal happens before anything runs.
 | `RootCommandHandler` — the ordered authorisation sequence | 24 tests |
 | `PrivilegedCommandGateway` + dispatcher wiring | 22 tests, end to end from a wire request |
 | `AuditLogger` — privileged-operation trail, sizes not contents | 9 tests |
-| Owner UI for granting, revoking and reviewing the audit trail | Not covered by an automated test — see [Limitations](#limitations) |
+| Owner UI for granting, revoking access | 5 instrumented tests, against the real dialog and a real device identity |
+| Owner UI for reviewing the audit trail | Not covered by an automated test — see [Limitations](#limitations) |
 
 Those 22 wiring tests assert on whether a command *ran*, not on what a decision object said.
 Removing the authorisation check from the handler turns 18 tests red across the suite, which
@@ -496,9 +497,9 @@ yet:
 - **The pairing secret is the entire authority.** Anyone holding it is indistinguishable
   from the legitimate client. There is no forward secrecy: traffic recorded now can be
   decrypted by someone who learns the secret later. Regenerating the secret bounds that.
-- **The owner-facing grant UI has no automated test.** The authorisation logic behind it is
-  covered thoroughly, but the screen that issues and revokes grants has only been exercised
-  by building it, not by running it on a device in this environment.
+- **The owner-facing audit-trail review screen has no automated test.** Granting and
+  revoking access through the app is now covered by instrumented tests against a real
+  device identity; the dialog that lists past privileged operations is not.
 - **`AI_ROOT` is a policy control, not a boundary against a hostile client.** It rests on the
   `initiator` field, which the peer supplies. DroidPilot's own MCP server declares every
   command as AI-initiated, which is the truth and makes the gate meaningful — but a client
