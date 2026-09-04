@@ -146,6 +146,13 @@ class GrantUiInstrumentedTest {
         click(context.getString(R.string.btn_grant_root))
         awaitText(context.getString(R.string.grant_root_warning))
 
+        // The warning message and the duration list are separate views inside the same
+        // MaterialAlertDialogBuilder dialog, and do not necessarily finish laying out in the
+        // same frame — waiting for the message alone raced the list on a slow (CI) emulator.
+        // Every other test in this file waits for `grant_duration_title` before clicking an
+        // item; this test waits for the item itself, since the root flow's dialog has a
+        // warning message instead of that title.
+        awaitText(context.getString(R.string.grant_until_revoked))
         click(context.getString(R.string.grant_until_revoked))
 
         val grant = activeGrant(RemotePermission.REMOTE_ROOT)
